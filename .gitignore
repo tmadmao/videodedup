@@ -13,6 +13,9 @@ video_dedup_thumbs/
 # 默认不公开；如需一起提交，删掉这一行即可
 .workbuddy/
 
+# ---- 打包产物（走 GitHub Releases 分发，不入库）----
+dist/
+
 # ---- 测试用的样本视频/临时产物 ----
 testdata/
 *.tmp

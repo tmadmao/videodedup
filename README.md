@@ -43,6 +43,8 @@ pip install -r requirements.txt
 python video_dedup.py
 ```
 
+> 也可以直接下载打包好的压缩包：**[Releases](https://github.com/tmadmao/videodedup/releases/latest)** → `videodedup-v1.1.zip`（解压即用，同样是双击 bat）
+
 环境要求：Windows + Python 3.8 以上（官方安装包自带 tkinter）。
 建议 `ffmpeg` 在 PATH 中（缺失时仍可运行，只是元信息读取兜底方案少一层）。
 
@@ -171,6 +173,7 @@ python video_dedup.py --scan "D:\视频库" --no-recursive --min-size 20 --worke
 | `requirements.txt` | 依赖清单 |
 | `安装依赖.bat` / `运行工具.bat` | Windows 双击即用 |
 | `docs/` | 界面截图（README 中引用的那两张） |
+| `tools/` | 发布打包脚本：`build_release_zip.py` 生成 dist/ 压缩包，`gh_release.py` 发布到 GitHub Releases |
 | `LICENSE` | MIT 开源协议 |
 
 运行期产生的本地文件（都在本机，可随时删除）：
