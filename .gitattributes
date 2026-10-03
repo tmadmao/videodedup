@@ -1,0 +1,7 @@
+# 统一换行符，避免 Windows/Linux 协作时出现整文件 diff
+* text=auto
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.bat  text eol=crlf
+*.png  binary

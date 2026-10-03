@@ -1,0 +1,18 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- 本工具运行期产生的本地缓存（都在本机，不应提交）----
+.video_dedup_cache.json
+.video_dedup_config.json
+video_dedup_thumbs/
+
+# ---- 本地 AI 助手工作区数据（含本机路径、项目记忆与配置）----
+# 默认不公开；如需一起提交，删掉这一行即可
+.workbuddy/
+
+# ---- 测试用的样本视频/临时产物 ----
+testdata/
+*.tmp

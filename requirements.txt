@@ -1,0 +1,12 @@
+# 本地视频查重小工具 —— 运行依赖
+# 安装：pip install -r requirements.txt
+#
+# 说明：以下全部为本地运行的库，工具本身不联网、不上传任何视频或图片。
+#       tkinter 随 Python 官方安装包提供，不需要（也无法）用 pip 安装。
+
+opencv-python>=4.5.0     # 视频解码、抽帧、缩放
+pillow>=9.0.0            # 缩略图生成 + Tk 显示
+numpy>=1.21.0            # 数组运算
+imagehash>=4.2.0         # 感知哈希 pHash（可选，缺失时自动改用内置 DCT pHash）
+pymediainfo>=5.1.0       # 分辨率/时长/码率/编码读取（可选，缺失时自动改用 ffprobe）
+send2trash>=1.8.0        # 移入系统回收站（可选，缺失时改用本地"回收站文件夹"兜底）
