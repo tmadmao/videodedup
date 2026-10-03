@@ -21,6 +21,8 @@ FILES = [
     "LICENSE",
     "docs/screenshot-cover.png",
     "docs/screenshot-duration-sort.png",
+    "tools/build_release_zip.py",
+    "tools/gh_release.py",
 ]
 
 # 压缩包内附带一个"先读我"，降低上手门槛
