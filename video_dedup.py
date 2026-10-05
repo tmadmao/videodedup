@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-本地视频查重小工具  Video Dedup Tool  v1.2
+本地视频查重小工具  Video Dedup Tool  v1.2.1
 =====================================================================
 功能一览
   1. 选择本地文件夹，递归扫描子目录内所有视频文件（mp4/mkv/mov/avi/flv ...）
@@ -142,7 +142,7 @@ if HAS_CV2:
 # ============================================================================
 
 APP_NAME = "本地视频查重工具"
-APP_VER = "1.2"
+APP_VER = "1.2.1"
 
 # 识别的视频扩展名
 VIDEO_EXTS = {
@@ -885,9 +885,9 @@ def _thumb_key(path: str) -> str:
     """缩略图缓存文件名（含缓存版本，方便整体失效重建）"""
     try:
         st = os.stat(path)
-        raw = f"v2|{path}|{st.st_size}|{int(st.st_mtime)}"
+        raw = f"{CACHE_VER}|{path}|{st.st_size}|{int(st.st_mtime)}"
     except OSError:
-        raw = f"v2|{path}"
+        raw = f"{CACHE_VER}|{path}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -1041,6 +1041,12 @@ def pick_keeper(videos) -> tuple:
         return None, ""
     if len(cands) == 1:
         return cands[0], "组内唯一"
+    # ★ 先按路径排序，让所有「平局」都有确定的裁决方向（v1.2.1 修复 A1）。
+    #   max() 在数值完全相等时返回【先遇到】的那个：两个字节数一样的副本之间，
+    #   候选顺序一旦变成"线程完成次序"（CLI 用 as_completed 收集），
+    #   同一个目录每次扫描给出的「建议保留」就会漂移。
+    #   按路径排好序后，同输入必得同输出，GUI 与命令行也指向同一个文件。
+    cands = sorted(cands, key=lambda v: str(getattr(v, "path", "")).lower())
 
     # ---- 第 1 步：编码质量下限门 ----
     bpps = [bits_per_pixel(v) for v in cands]
@@ -1595,7 +1601,7 @@ class VideoDedupApp:
         self.photo_refs: dict = {}
         self.big_photo = None
         self.iid_to_path: dict = {}
-        self.last_backup_dir: str = ""
+        self.last_backup_dir: str = str(self._cfg("backup_dir", ""))
         self.scan_start_ts = 0.0
 
         # ---- 变量 ----
@@ -1616,10 +1622,10 @@ class VideoDedupApp:
         self.ignore_bw_var = tk.BooleanVar(value=bool(self._cfg("ignore_bw", True)))
         self.gray_hint = tk.StringVar(value="")
         self._update_gray_hint()
-        self.tol_ratio_var = tk.StringVar(value="10")
-        self.tol_sec_var = tk.StringVar(value="5")
-        self.sample_var = tk.StringVar(value=str(SAMPLE_FRAMES_DEFAULT))
-        self.min_size_var = tk.StringVar(value="0")
+        self.tol_ratio_var = tk.StringVar(value=str(self._cfg("tol_ratio", "10")))
+        self.tol_sec_var = tk.StringVar(value=str(self._cfg("tol_sec", "5")))
+        self.sample_var = tk.StringVar(value=str(self._cfg("sample", str(SAMPLE_FRAMES_DEFAULT))))
+        self.min_size_var = tk.StringVar(value=str(self._cfg("min_size", "0")))
         self.workers_var = tk.StringVar(value=str(max(2, min(6, (os.cpu_count() or 4) // 2 or 2))))
         self.status_var = tk.StringVar(value="请选择要扫描的文件夹…")
         self.summary_var = tk.StringVar(value="")
@@ -1651,8 +1657,7 @@ class VideoDedupApp:
             self.thr_hint.set(f"≈ 平均距离 ≤ {d:.1f}/64　{level}{tail}")
         except Exception:
             pass
-        except Exception:
-            pass
+
     def _update_gray_hint(self):
         """把灰度通道阈值翻译成"平均逐像素差异"说明"""
         try:
@@ -1673,10 +1678,16 @@ class VideoDedupApp:
             pass
 
     def _on_gray_toggle(self):
-        """勾/去勾「忽略黑/白像素」：更新提示文案并刷新列表"""
+        """勾/去勾「忽略黑/白像素」：更新提示文案，并立即按新设置重新分组"""
         self._update_gray_hint()
         try:
-            self.render()
+            # ★ 必须重新分组，不能只 render（v1.2.1 修复 B1）：
+            #   这个开关影响的是「判定」而不是「显示」。此前只刷新列表，
+            #   用户按 README 说的"关掉掩码做对照"会看不到任何变化。
+            if self.items:
+                self.regroup_now(silent=True)
+            else:
+                self.render()
         except Exception:
             pass
 
@@ -2062,7 +2073,7 @@ class VideoDedupApp:
             return
         folder = self.folder_var.get().strip().strip('"')
         if not folder or not Path(folder).is_dir():
-            tkmsg.showwarning(APP_NAME, "请先选择一个有效的文件夹。")
+            tkmsg.showwarning(APP_NAME, "请先选择一个有效的文件夹。", parent=self.root)
             return
         opts = self._snapshot_options()
         self.scan_root = folder
@@ -2178,7 +2189,7 @@ class VideoDedupApp:
                 elif kind == "error":
                     self.scanning = False
                     self._end_scan_state()
-                    tkmsg.showerror(APP_NAME, f"扫描出现异常：\n{msg[1][-1500:]}")
+                    tkmsg.showerror(APP_NAME, f"扫描出现异常：\n{msg[1][-1500:]}", parent=self.root)
                     finished = True
         except queue.Empty:
             pass
@@ -2255,7 +2266,7 @@ class VideoDedupApp:
         if n == 0:
             self.status_var.set("扫描完成：该文件夹下没有找到视频文件。")
             self.summary_var.set("")
-            tkmsg.showinfo(APP_NAME, "该文件夹下没有找到视频文件。\n可尝试：勾选“递归扫描子目录”，或调整“跳过小于(MB)”过滤条件。")
+            tkmsg.showinfo(APP_NAME, "该文件夹下没有找到视频文件。\n可尝试：勾选“递归扫描子目录”，或调整“跳过小于(MB)”过滤条件。", parent=self.root)
             return
         dup_files = sum(len(g) for g in groups)
         saving = 0
@@ -2712,7 +2723,7 @@ class VideoDedupApp:
     def action_open(self, from_selection=False):
         paths = self.target_paths(prefer_checked=not from_selection)
         if not paths:
-            tkmsg.showinfo(APP_NAME, "请先勾选文件，或在列表中选中一行。")
+            tkmsg.showinfo(APP_NAME, "请先勾选文件，或在列表中选中一行。", parent=self.root)
             return
         for p in paths[:5]:
             open_in_explorer(p)
@@ -2720,10 +2731,10 @@ class VideoDedupApp:
     def action_play(self, from_selection=False):
         paths = self.target_paths(prefer_checked=not from_selection)
         if not paths:
-            tkmsg.showinfo(APP_NAME, "请先勾选文件，或在列表中选中一行。")
+            tkmsg.showinfo(APP_NAME, "请先勾选文件，或在列表中选中一行。", parent=self.root)
             return
         if len(paths) > 3:
-            if not tkmsg.askyesno(APP_NAME, f"将用系统默认播放器打开 {len(paths)} 个视频，是否继续？"):
+            if not tkmsg.askyesno(APP_NAME, f"将用系统默认播放器打开 {len(paths)} 个视频，是否继续？", parent=self.root):
                 return
         for p in paths[:10]:
             play_video(p)
@@ -2742,21 +2753,21 @@ class VideoDedupApp:
     def action_trash(self):
         paths = self.target_paths()
         if not paths:
-            tkmsg.showinfo(APP_NAME, "请先勾选要处理的文件（勾选框在列表最左侧）。")
+            tkmsg.showinfo(APP_NAME, "请先勾选要处理的文件（勾选框在列表最左侧）。", parent=self.root)
             return
         total = sum(self.items[p].size for p in paths if p in self.items)
         if not HAS_TRASH:
             tkmsg.showerror(
                 APP_NAME,
                 "未安装 send2trash，出于安全考虑不会执行删除。\n\n请先执行：pip install send2trash\n"
-                "或改用“移动到备份文件夹”功能。")
+                "或改用“移动到备份文件夹”功能。", parent=self.root)
             return
         preview = "\n".join(f"· {Path(p).name}　({human_size(self.items[p].size)})"
                             for p in paths[:15] if p in self.items)
         more = f"\n…… 其余 {len(paths) - 15} 个" if len(paths) > 15 else ""
         msg = (f"⚠ 即将把以下 {len(paths)} 个文件移入【系统回收站】（共 {human_size(total)}）：\n\n"
                f"{preview}{more}\n\n回收站中的文件仍可还原，确认继续？")
-        if not tkmsg.askyesno(APP_NAME, msg, icon="warning"):
+        if not tkmsg.askyesno(APP_NAME, msg, icon="warning", parent=self.root):
             return
         ok, fails = recycle_files(paths)
         if fails:
@@ -2767,7 +2778,7 @@ class VideoDedupApp:
                 f"原因示例：{why}\n\n"
                 f"是否改为移动到各自目录下的「_视频查重回收站」文件夹？\n"
                 f"（同样是移动操作，随时可以手动拖回，不会真正删除。选否 则什么都不做。）",
-                icon="warning")
+                icon="warning", parent=self.root)
             if ans:
                 ok2, fails2 = move_to_local_trash([p for p, _ in fails])
                 ok += ok2
@@ -2782,13 +2793,13 @@ class VideoDedupApp:
         tip = f"已移入回收站 {ok} 个文件。"
         if fails:
             tip += f"\n失败 {len(fails)} 个：\n" + "\n".join(f"· {p}：{e}" for p, e in fails[:8])
-        tkmsg.showinfo(APP_NAME, tip)
+        tkmsg.showinfo(APP_NAME, tip, parent=self.root)
         self.status_var.set(tip.splitlines()[0])
 
     def action_backup(self):
         paths = self.target_paths()
         if not paths:
-            tkmsg.showinfo(APP_NAME, "请先勾选要处理的文件（勾选框在列表最左侧）。")
+            tkmsg.showinfo(APP_NAME, "请先勾选要处理的文件（勾选框在列表最左侧）。", parent=self.root)
             return
         d = tkfile.askdirectory(title="选择备份文件夹（文件会被移动到这里）",
                                        initialdir=self.last_backup_dir or self.scan_root or str(Path.home()))
@@ -2799,7 +2810,7 @@ class VideoDedupApp:
         msg = (f"即将把 {len(paths)} 个文件（共 {human_size(total)}）移动到：\n{d}\n\n"
                f"{'保留原目录结构：是' if self.keep_struct_var.get() else '全部平铺到备份目录'}\n"
                f"同名文件会自动加 (1)(2) 后缀，不会覆盖。确认继续？")
-        if not tkmsg.askyesno(APP_NAME, msg):
+        if not tkmsg.askyesno(APP_NAME, msg, parent=self.root):
             return
         ok, fails = move_to_backup(paths, d, self.keep_struct_var.get(), self.scan_root)
         moved = [p for p in paths if p not in [f[0] for f in fails]]
@@ -2810,7 +2821,7 @@ class VideoDedupApp:
         tip = f"已移动 {ok} 个文件到备份文件夹。"
         if fails:
             tip += f"\n失败 {len(fails)} 个：\n" + "\n".join(f"· {p}：{e}" for p, e in fails[:8])
-        tkmsg.showinfo(APP_NAME, tip)
+        tkmsg.showinfo(APP_NAME, tip, parent=self.root)
         self.status_var.set(tip.splitlines()[0])
         self._save_cfg()
 
@@ -2827,7 +2838,20 @@ class VideoDedupApp:
         items = list(self.items.values())
         if not items:
             return
-        groups, singles, gsim = group_videos(items, sim_thr, tol_ratio, tol_sec)
+        # ★ 灰度通道参数必须一并传入（v1.2.1 修复 B1）：
+        #   此前只传了 4 个参数，于是「灰度通道阈值」滑杆与「忽略黑/白像素」开关
+        #   在"重新分组"时被静默忽略（只有"开始扫描"才生效），
+        #   与 README「调完阈值点重新分组即可」的说法不符。
+        try:
+            gray_thr = float(self.gray_thr_var.get())
+        except (ValueError, tk.TclError):
+            gray_thr = DEFAULT_THRESHOLD_GRAY
+        ignore_bw = bool(self.ignore_bw_var.get())
+        groups, singles, gsim = group_videos(
+            items, sim_thr, tol_ratio, tol_sec,
+            cancel_flag=self.stop_flag,
+            gray_thr=gray_thr, use_gray=True,
+            ignore_black=ignore_bw, ignore_white=ignore_bw)
         self.groups = [[items[i].path for i in g] for g in groups]
         self.singles = [items[i].path for i in singles]
         self.group_sims = list(gsim or [])
@@ -2851,14 +2875,14 @@ class VideoDedupApp:
                         n += 1
                     except OSError:
                         pass
-            tkmsg.showinfo(APP_NAME, f"已清理缩略图缓存 {n} 个文件。\n（下次扫描会重新生成封面帧 / 内容帧 / 中间帧）")
+            tkmsg.showinfo(APP_NAME, f"已清理缩略图缓存 {n} 个文件。\n（下次扫描会重新生成封面帧 / 内容帧 / 中间帧）", parent=self.root)
             self.photo_refs.clear()
         except Exception as e:
-            tkmsg.showerror(APP_NAME, f"清理失败：{e}")
+            tkmsg.showerror(APP_NAME, f"清理失败：{e}", parent=self.root)
 
     def export_csv_ui(self):
         if not self.items:
-            tkmsg.showinfo(APP_NAME, "当前没有可导出的数据，请先扫描。")
+            tkmsg.showinfo(APP_NAME, "当前没有可导出的数据，请先扫描。", parent=self.root)
             return
         p = tkfile.asksaveasfilename(title="导出扫描结果", defaultextension=".csv",
                                             initialfile="视频查重结果.csv",
@@ -2879,7 +2903,7 @@ class VideoDedupApp:
             export_csv(rows, p)
             self.status_var.set(f"已导出 {len(rows)} 条记录到：{p}")
         except Exception as e:
-            tkmsg.showerror(APP_NAME, f"导出失败：{e}")
+            tkmsg.showerror(APP_NAME, f"导出失败：{e}", parent=self.root)
 
     def _on_close(self):
         try:
@@ -2938,6 +2962,12 @@ def run_cli(args) -> int:
             print(f"\r分析中 {done}/{len(files)}  {Path(p).name[:60]:<60}", end="")
     print()
     save_cache()
+
+    # ★ 分组前固定顺序（v1.2.1 修复 A1）：上面用 as_completed 收集，
+    #   完成次序随线程调度变化；而平局裁决（同字节数的副本之间选"建议保留"）
+    #   依赖候选顺序，会导致同一命令每次跑出不同结果。
+    #   按路径排序后，命令行结果可复现，并与 GUI（按扫描顺序建表）保持口径一致。
+    items.sort(key=lambda v: v.path.lower())
 
     tol_ratio = args.tol / 100.0
     mask_on = not args.no_mask
@@ -3086,12 +3116,18 @@ def selftest() -> int:
               f"{'通过 OK（没有取到黑帧）' if cover_ok else '未通过 FAIL（取到了黑帧）'}")
         ok = ok and cover_ok
 
-        # ---- 掩码比对（抗水印）校验 ----
-        # 造一个"内容与 a 相同、但每帧左上角压了一块白色水印"的视频，
-        # 验证：① 不开掩码时相似度被水印拉低；② 开掩码后相似度明显回升。
-        # 这是掩码"真的生效"的直接证据，而不是只跑通不报错。
-        def make_watermark(path):
-            w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (320, 240))
+        # ---- 抗水印校验（v1.2.1 起覆盖两种水印）----
+        # 造两个"内容与 a 相同、只在左上角压了水印"的视频：
+        #   ① 不透明纯白块 —— 掩码（排除近黑/近白）能直接把它扣掉；
+        #   ② 半透明台标   —— 白字 85% + 半透明黑底 45%，合成后既不到 240 也不低于 32，
+        #                     【掩码排除不到它】。
+        # 为什么必须两个都测：v1.2 的自检只测了 ①，于是得出"掩码把相似度从 95% 拉回
+        # 99.96%"这种过于乐观的结论；而真实的下载站/平台水印是 ②，此时掩码几乎没有增益
+        # （实测甚至略微降低），真正把它认出来的是 32×32 灰度图本身的逐像素差（SAD）。
+        # 所以断言改为：两种水印都必须【被判为重复】（这才是用户真正要的保证）；
+        # 掩码增益只在 ① 上断言，② 只如实打印数值并说明局限。
+        def _base_frames():
+            """与 a 同源的一帧序列（不含水印）"""
             grad = np.linspace(40, 200, 320, dtype=np.uint8)
             bg = cv2.cvtColor(np.tile(grad, (240, 1)), cv2.COLOR_GRAY2BGR)
             for i in range(60):
@@ -3100,38 +3136,72 @@ def selftest() -> int:
                 cv2.circle(fr, (200, 150), 30 + (i % 20), (0, 255, 0), -1)
                 cv2.putText(fr, "S0", (10, 225), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                             (255, 255, 255), 2)
-                # 白色不透明水印（模拟台标 / 字幕条）：与 a 唯一的不同点
+                yield fr
+
+        def make_watermark(path):
+            """① 不透明纯白块水印（掩码的典型适用场景）"""
+            w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (320, 240))
+            for fr in _base_frames():
                 cv2.rectangle(fr, (10, 8), (150, 46), (255, 255, 255), -1)
                 w.write(fr)
             w.release()
 
-        wm = tmp / "watermark.mp4"
-        make_watermark(wm)
-        fw = compute_features(str(wm))
-        if fa["gray"] and fw["gray"]:
-            d_masked, npos = masked_gray_distance(fa["gray"], fw["gray"], True, True)
-            d_plain, n_plain = masked_gray_distance(fa["gray"], fw["gray"], False, False)
-            sim_masked, sim_plain = 1.0 - d_masked, 1.0 - d_plain
-            print("\n灰度掩码校验（与无水印原片比）：")
-            print(f"  不用掩码：平均像素差 {d_plain * 255:6.2f}/255 -> 相似度 {sim_plain:.2%}"
-                  f"（水印把它拉低了）")
-            if npos == 0:
-                print("  启用掩码：无法判定（有效像素太少）-> 未通过 FAIL")
-                ok = False
-            else:
-                print(f"  启用掩码：平均像素差 {d_masked * 255:6.2f}/255 -> 相似度 {sim_masked:.2%}"
-                      f"（有效位置 {npos} 个）")
-                mask_ok = sim_masked > sim_plain
-                print(f"  掩码是否生效：{'通过 OK（掩码后相似度更高）' if mask_ok else '未通过 FAIL（掩码没起作用）'}")
-                ok = ok and mask_ok
+        def make_watermark_soft(path):
+            """② 半透明台标（白字 85% + 半透明黑底 45%）—— 贴近真实平台水印"""
+            w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (320, 240))
+            for fr in _base_frames():
+                ov = fr.copy()
+                cv2.rectangle(ov, (6, 4), (200, 56), (0, 0, 0), -1)
+                fr = cv2.addWeighted(ov, 0.45, fr, 0.55, 0)      # 半透明黑底
+                ov = fr.copy()
+                cv2.putText(ov, "MYCHANNEL 2026", (12, 40), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.62, (255, 255, 255), 2)
+                fr = cv2.addWeighted(ov, 0.85, fr, 0.15, 0)      # 半透明白字
+                w.write(fr)
+            w.release()
 
-            # 端到端：带水印的那个必须能和原片判为一组（两个通道 OR 的结果）
+        wm = tmp / "watermark.mp4"
+        wms = tmp / "watermark_soft.mp4"
+        make_watermark(wm)
+        make_watermark_soft(wms)
+        fw = compute_features(str(wm))
+        fws = compute_features(str(wms))
+        if fa["gray"] and fw["gray"] and fws["gray"]:
             ia = VideoItem(path=str(a), hashes=fa["hashes"], gray=fa["gray"])
-            iw = VideoItem(path=str(wm), hashes=fw["hashes"], gray=fw["gray"])
-            hit, sim, chan = compare_pair(ia, iw, DEFAULT_THRESHOLD, DEFAULT_THRESHOLD_GRAY)
-            print(f"  端到端判重：命中={hit} 相似度={sim:.2%} 命中通道={chan or '无'}"
-                  f"  -> {'通过 OK' if hit else '未通过 FAIL'}")
-            ok = ok and hit
+            sim_masked = None
+            print("\n抗水印校验（与无水印原片比）：")
+            for tag, wpath, feats in (("① 不透明纯白块", wm, fw),
+                                      ("② 半透明台标 ", wms, fws)):
+                d_masked, npos = masked_gray_distance(fa["gray"], feats["gray"], True, True)
+                d_plain, _ = masked_gray_distance(fa["gray"], feats["gray"], False, False)
+                sm, sp = 1.0 - d_masked, 1.0 - d_plain
+                print(f"  {tag}  掩码开 {sm:.2%} / 掩码关 {sp:.2%}"
+                      f"（差 {(sm - sp) * 100:+.2f}pp，有效位置 {npos}）")
+                if tag.startswith("①"):
+                    sim_masked = sm
+                    if npos == 0:
+                        print("    掩码增益断言：无法判定（有效像素太少）-> 未通过 FAIL")
+                        ok = False
+                    else:
+                        mask_ok = sm > sp
+                        print(f"    掩码增益断言：{'通过 OK（掩码后更高）' if mask_ok else '未通过 FAIL'}")
+                        ok = ok and mask_ok
+                else:
+                    print("    说明：半透明水印合成后既不到 240 也不低于 32，"
+                          "掩码排除不到它 —— 认出它靠的是灰度 SAD 通道本身。")
+
+                # 端到端：两种水印都必须能与原片判为一组（两个通道 OR 的结果）
+                it = VideoItem(path=str(wpath), hashes=feats["hashes"], gray=feats["gray"])
+                hit, sim, chan = compare_pair(ia, it, DEFAULT_THRESHOLD, DEFAULT_THRESHOLD_GRAY)
+                print(f"    端到端判重：命中={hit} 相似度={sim:.2%} 命中通道={chan or '无'}"
+                      f"  -> {'通过 OK' if hit else '未通过 FAIL'}")
+                ok = ok and hit
+                # 灰度通道【单独】（关掉掩码）也必须认出来 —— 它才是抗水印的主力
+                hit_nm, sim_nm, _ = compare_pair(
+                    ia, it, DEFAULT_THRESHOLD, DEFAULT_THRESHOLD_GRAY,
+                    use_gray=True, ignore_black=False, ignore_white=False)
+                print(f"    仅灰度通道（关掩码）：命中={hit_nm} 相似度={sim_nm:.2%}"
+                      f"  -> {'通过 OK' if hit_nm else '未通过 FAIL'}")
 
             # 关键回归：OR 门绝不能把"完全不同的视频"也判成重复。
             # 灰度通道若不设有效像素下限，很容易在这里误报（实测踩过：
@@ -3145,7 +3215,7 @@ def selftest() -> int:
             ok = ok and fp_ok
 
             # 异源样本在灰度通道上必须仍然不像（掩码没有把有效信息也掩掉）
-            if fc["gray"]:
+            if fc["gray"] and sim_masked is not None:
                 dg_ac, n_ac = masked_gray_distance(fa["gray"], fc["gray"], True, True)
                 if n_ac == 0:
                     print("  异源样本灰度相似度：无法判定（有效像素太少）")

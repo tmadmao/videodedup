@@ -29,7 +29,7 @@ if errorlevel 1 (
 
 echo [3/3] 开始打包，首次约 1-2 分钟，请稍候...
 echo.
-%PYCMD% -m PyInstaller --onefile --noconfirm --clean --name VideoDedupTool --distpath dist --workpath build --specpath build video_dedup.py
+%PYCMD% -m PyInstaller --onefile --noconsole --noconfirm --clean --name VideoDedupTool --distpath dist --workpath build --specpath build video_dedup.py
 if errorlevel 1 goto FAIL
 
 echo.
@@ -38,6 +38,8 @@ echo   打包完成
 echo   产物：dist\VideoDedupTool.exe   约 100 MB
 echo.
 echo   说明：
+echo     - --noconsole：双击不弹黑框；带参数运行时会自动附着父控制台，
+echo       所以「python video_dedup.py --scan ...」那套命令行模式在 exe 上同样可用
 echo     - 首次启动要把约 100MB 解压到临时目录，5-10 秒属正常
 echo     - exe 可自由改名，比如改成「视频查重工具.exe」
 echo     - 若启动太慢或被杀软拦截，改用文件夹模式：

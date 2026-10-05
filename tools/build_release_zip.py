@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_VERSION = "v1.2"
+DEFAULT_VERSION = "v1.2.1"
 OUT_DIR = ROOT / "dist"
 
 # 要打包的文件（相对 ROOT）——不含 .git / .workbuddy / 缓存 / dist 自身
@@ -27,10 +27,13 @@ FILES = [
     "安装依赖.bat",
     "打包exe.bat",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "docs/screenshot-cover.png",
     "docs/screenshot-duration-sort.png",
     "docs/ROADMAP.md",
+    "docs/PROJECT-STATUS.md",
+    "docs/AUDIT-2026-10-05.md",
     "tools/build_release_zip.py",
     "tools/gh_release.py",
     "tools/make_testdata.py",
@@ -67,7 +70,8 @@ MPEG-2(TS) / FLV / ProRes 等 12 种编码容器，全部成功。
 所有删除类操作都必须人工勾选并二次确认，默认走系统回收站。
 
 详细说明见 README.md，界面截图见 docs/ 目录，
-开发计划（含实测数据与踩坑记录）见 docs/ROADMAP.md。
+更新日志见 CHANGELOG.md，项目状态（已停止开发）见 docs/PROJECT-STATUS.md，
+开发计划与实测数据见 docs/ROADMAP.md，项目审计报告见 docs/AUDIT-2026-10-05.md。
 Copyright (c) 2026 seanfan   MIT License
 """
 
@@ -109,6 +113,18 @@ def main() -> int:
             print(f"  {i.filename:<56} {i.file_size:>9,} 字节")
         bad = z.testzip()
         print("\n完整性校验：", "通过 OK" if bad is None else f"损坏 FAIL ({bad})")
+
+    # 校验清单（v1.2.1 起）：把本次发布产物的 SHA256 落到 dist/SHA256SUMS.txt，
+    # 便于在不打开 Release 页面的情况下独立核对分发文件是否被改动。
+    lines = [f"{sha}  {out_zip.name}"]
+    exe = OUT_DIR / "VideoDedupTool.exe"
+    if exe.exists():
+        lines.append(f"{hashlib.sha256(exe.read_bytes()).hexdigest()}  {exe.name}")
+    sums = OUT_DIR / "SHA256SUMS.txt"
+    sums.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\n校验清单：{sums}")
+    for ln in lines:
+        print(f"  {ln}")
     return 0
 
 
