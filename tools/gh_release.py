@@ -40,16 +40,22 @@ CONTENT_TYPES = {
 
 
 def get_token() -> str:
-    """从 Git 凭据管理器取 GitHub 凭据（不打印、不落盘）"""
+    """
+    从 Git 凭据管理器取 GitHub 凭据（不打印、不落盘）。
+
+    注意：凭据管理器首次调用可能要 5~10 秒（尤其刚连上代理时），超时给宽一点，
+    否则会误判成"没有凭据"。
+    """
     try:
         p = subprocess.run(
             ["git", "credential", "fill"],
             input="protocol=https\nhost=github.com\n\n",
-            capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+            capture_output=True, text=True, cwd=str(ROOT), timeout=180,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
     except Exception as e:
         print(f"读取 Git 凭据失败：{e}")
+        print("  提示：可先手动执行  git credential fill  确认凭据可用（应输出 password=...）")
         return ""
     for line in p.stdout.splitlines():
         if line.startswith("password="):
