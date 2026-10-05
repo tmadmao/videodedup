@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-本地视频查重小工具  Video Dedup Tool  v1.1
+本地视频查重小工具  Video Dedup Tool  v1.2
 =====================================================================
 功能一览
   1. 选择本地文件夹，递归扫描子目录内所有视频文件（mp4/mkv/mov/avi/flv ...）
@@ -10,11 +10,14 @@
      其中"封面帧"最适合肉眼比对是否同一来源
   4. 所有列均可点击排序（时长 / 大小 / 分辨率 / 码率 / 文件名 / 路径…），再次点击切换升降序；
      并提供"平铺全部"视图，可按视频长度排序，快速定位时长几乎一致的可疑项
-  5. 基于「视频采样帧感知哈希 pHash」自动识别同源视频：
-       复制改名、二次转码、加水印、轻微裁切 —— 都能识别
-     相似度阈值、时长容差均可自定义；相似视频自动分组
-  6. 人工勾选后执行：打开所在文件夹 / 播放预览 / 移入回收站 / 移动到备份文件夹
-  7. 简体中文 GUI（tkinter）
+  5. 双通道自动识别同源视频：
+       ① pHash 通道   —— 对整体调色 / 亮度偏移 / 分辨率变化鲁棒
+       ② 灰度掩码通道 —— 忽略黑/白像素，抗水印 / 黑边 / 烧制字幕
+     两个通道任一命中即判重。复制改名、二次转码、加水印、轻微裁切都能认出来
+  6. 自动分组（带「组代表互验」，避免把同系列的不同视频并成一大组）；
+     每组给出"建议保留"（按 时长→分辨率→画质→码率→帧率→大小 逐级淘汰，并说明理由）
+  7. 人工勾选后执行：打开所在文件夹 / 播放预览 / 移入回收站 / 移动到备份文件夹
+  8. 简体中文 GUI（tkinter）
 
 隐私与安全
   * 全部运算在本机完成，代码中没有任何网络请求（无 requests / urllib / socket / http 调用）
@@ -23,6 +26,7 @@
 
 依赖（见 requirements.txt）：
   opencv-python  pillow  numpy  imagehash(可选)  pymediainfo(可选)  send2trash(可选)
+  不需要 ffmpeg：元信息来自 pymediainfo 自带的 MediaInfo，解码来自 OpenCV 内置的 FFmpeg
 
 命令行模式（可选，用于批量/无人值守）：
   python video_dedup.py --scan "D:\\videos" --out report.json --csv report.csv
@@ -138,7 +142,7 @@ if HAS_CV2:
 # ============================================================================
 
 APP_NAME = "本地视频查重工具"
-APP_VER = "1.1"
+APP_VER = "1.2"
 
 # 识别的视频扩展名
 VIDEO_EXTS = {
@@ -153,10 +157,33 @@ CACHE_FILE = Path(os.path.expanduser("~")) / ".video_dedup_cache.json"
 CONFIG_FILE = Path(os.path.expanduser("~")) / ".video_dedup_config.json"
 
 SAMPLE_FRAMES_DEFAULT = 12      # 每个视频均匀采样的帧数（用于 pHash）
-DEFAULT_THRESHOLD = 0.80        # 默认相似度阈值（≈ 平均汉明距离 ≤ 12.8 / 64）
+DEFAULT_THRESHOLD = 0.80        # pHash 通道默认相似度阈值（≈ 平均汉明距离 ≤ 12.8 / 64）
 ROW_THUMB_SIZE = (124, 70)      # 列表行缩略图尺寸
 BIG_THUMB_SIZE = (384, 216)     # 右侧预览大图尺寸
 RIGHT_PANEL_W = 400             # 右侧预览面板固定宽度
+
+# ---- 32×32 灰度指纹 + 掩码比对（用来抗水印 / 黑边 / 烧制字幕）----
+# 思路：把每帧强行压成 32×32 灰度小图，逐像素比绝对差；
+#       比对时把「两边都是近黑或近白」的像素排除在计分之外。
+#       水印通常是白字（可能带半透明黑底）、黑边白边、字幕，这些区域直接不参与，
+#       画面主体仍然严格比对 —— 于是【不必放宽阈值】就能认出水印副本。
+GRAY_SIDE = 32                      # 指纹边长
+GRAY_LEN = GRAY_SIDE * GRAY_SIDE    # 1024 字节/帧
+BLACK_PIXEL_LIMIT = 0x20            # ≤ 32 视为近黑
+WHITE_PIXEL_LIMIT = 0xF0            # ≥ 240 视为近白
+MASK_MIN_VALID = 256                # 有效像素少于这个数(25%)就弃权 —— 见下方说明
+# 为什么是 25% 而不是更低：有效像素太少时，比对结果没有统计意义，
+# 容易被"恰好重合的少数区域"带偏（实测踩过：大片纯黑的自检视频扣除黑色后
+# 只剩 6% 有效像素，结果把两个完全不同的视频判成 99.9% 相似）。
+# 有效像素不足时该位置【弃权】（不计入），由 pHash 通道接手判断。
+# 25% 不会误伤真实视频：宽银幕黑边后画面仍占约 76%，暗场景通常也有 40% 以上。
+DEFAULT_THRESHOLD_GRAY = 0.92       # 灰度通道默认相似度阈值
+# 实测标定（1080p/720p 同源变体，12 帧）：
+#   同源最差 97.67%（轻微裁切）　复制改名 100%　二次转码 99.63%　加水印 98.95%
+#   异源     74.93%
+# 中间有很宽的间隔，0.92 落在安全区内（也与 VDF 对同类度量的默认值一致）。
+
+CACHE_VER = "v3"                # 特征缓存版本；结构变更时递增，旧缓存自动失效重建
 
 # 缩略图来源（下拉框选项）：封面帧最适合肉眼比对"是否同一来源"
 THUMB_MODE_COVER = "封面（首帧，避开黑场）"
@@ -171,6 +198,90 @@ VIEW_DUP_ONLY = "仅重复组"
 VIEW_TILE = "平铺全部（可点列排序）"
 
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+# ----------------------------------------------------------------------------
+# 控制台安全输出（打包成 exe 后的两个真实坑，都已实测复现）
+#
+# 坑 1：中文 Windows 的 cmd 默认代码页是 936(GBK)，GBK 里没有 '✓'(U+2713)、
+#       '✗'、emoji 这些字符。一旦把输出重定向到文件（不是控制台），Python 会
+#       退回用 cp936 严格编码，打印 '✓' 直接抛 UnicodeEncodeError 并让程序崩掉。
+#       在 UTF-8 终端（Git Bash / Windows Terminal）里复现不出来，只在交付版暴露。
+#       做法：**保留控制台自身的编码**（改成 utf-8 反而会让 GBK 控制台下的中文变乱码），
+#             只把错误处理改成 replace —— 编不出的字符退化成 '?'，绝不再崩。
+#
+# 坑 2：用 --noconsole 打包后 sys.stdout 是 None，任何 print() 都会抛异常。
+#       做法：换成一个丢弃写入的空对象。
+# ----------------------------------------------------------------------------
+
+class _NullWriter:
+    """吞掉所有输出。用于 --noconsole 打包后 sys.stdout 为 None 的情况。"""
+
+    def write(self, s):
+        return len(s) if s else 0
+
+    def flush(self):
+        pass
+
+    def writable(self):
+        return True
+
+    def isatty(self):
+        return False
+
+    def fileno(self):
+        raise OSError("no console")
+
+    def reconfigure(self, **kwargs):
+        pass
+
+
+def _attach_parent_console() -> bool:
+    """
+    带命令行参数运行（--scan / --selftest）但打包时用的是 --noconsole：
+    把输出接回父进程的控制台，让命令行模式仍然可用。
+    双击（无参数）时不会走到这里，也就不会弹黑框。
+    """
+    if os.name != "nt" or sys.stdout is not None:
+        return False
+    try:
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        if not k.AttachConsole(-1):      # ATTACH_PARENT_PROCESS
+            if not k.AllocConsole():
+                return False
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8",
+                          errors="replace", buffering=1)
+        sys.stderr = sys.stdout
+        try:
+            sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def init_console(need_console: bool = True) -> None:
+    """启动时调用一次：让所有 print() 永远不会因编码或缺少控制台而崩掉"""
+    if need_console:
+        _attach_parent_console()
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            setattr(sys, name, _NullWriter())
+            continue
+        try:
+            # 只改错误处理，不改编码（见上方说明）
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
+def have_console() -> bool:
+    """当前是否有可用的输出目标（GUI 版双击运行时为 False）"""
+    return sys.stdout is not None and not isinstance(sys.stdout, _NullWriter)
 
 
 def human_size(n: float) -> str:
@@ -215,27 +326,65 @@ def fmt_bitrate(bps: float) -> str:
     return f"{bps:.0f} bps"
 
 
+# MediaInfo 的 format 字段取值 -> 人类可读名称（精确匹配，优先级最高）
+# 实测（12 种编码/容器）：format 远比 codec_id 可靠 ——
+#   codec_id 是【容器相关】的标识，FLV 里 H.264 是 "7"、MPEG-TS 里 MPEG-2 是 "2"，
+#   直接拿它会显示出「7」「2」这种没有意义的值。
+_CODEC_EXACT = {
+    "avc": "H.264", "h264": "H.264",
+    "hevc": "H.265", "h265": "H.265",
+    "vp9": "VP9", "vp8": "VP8", "av1": "AV1",
+    "mpeg video": "MPEG-2", "mpeg-1 video": "MPEG-1", "mpeg-2 video": "MPEG-2",
+    "mpeg-4 visual": "MPEG-4",
+    "jpeg": "MJPEG", "motion jpeg": "MJPEG",
+    "wmv1": "WMV1", "wmv2": "WMV2", "wmv3": "WMV3", "vc-1": "VC-1",
+    "prores": "ProRes", "theora": "Theora", "flv1": "Sorenson",
+    "sorenson h.263": "Sorenson",
+}
+
+# codec_id / 容器标识 -> 人类可读名称（前缀匹配，次优先）
 _CODEC_ALIAS = {
     "avc1": "H.264", "avc3": "H.264", "h264": "H.264", "x264": "H.264",
     "hvc1": "H.265", "hev1": "H.265", "h265": "H.265", "x265": "H.265",
     "vp09": "VP9", "vp9": "VP9", "vp08": "VP8", "av01": "AV1",
-    "mp4v": "MPEG-4", "mp4a": "AAC", "divx": "DivX", "xvid": "XviD",
-    "mpeg4": "MPEG-4", "msmpeg4v3": "MPEG-4(v3)", "wmv3": "WMV3",
-    "flv1": "Sorenson", "theora": "Theora", "prores": "ProRes",
+    "mp4v": "MPEG-4", "fmp4": "MPEG-4", "divx": "DivX", "xvid": "XviD",
+    "mpeg4": "MPEG-4", "msmpeg4v3": "MPEG-4(v3)",
+    "wmv3": "WMV3", "wvc1": "VC-1",
+    "flv1": "Sorenson", "theora": "Theora", "prores": "ProRes", "apcs": "ProRes",
+    "mjpg": "MJPEG",
 }
 
 
 def norm_codec(raw: str) -> str:
-    """把 avc1 / hvc1 / V_MPEG4-ISO-AVC 之类的 codec id 归一化成人类可读名称"""
+    """
+    把 avc1 / hvc1 / V_MPEG4-ISO-AVC / MPEG Video 之类的标识归一化成人类可读名称。
+
+    注意：数字型 codec_id（FLV 的 "7"、MPEG-TS 的 "2"）**返回空串**，
+    表示"这个值没有信息量"，由调用方去试下一个候选字段，而不是把数字显示给用户。
+    """
     if not raw:
         return ""
     s = str(raw).strip()
-    key = s.lower().replace(".", "").replace("_", "")
+    if not s:
+        return ""
+    low = s.lower()
+
+    # 1) 纯数字的容器 codec id：无信息量，交给调用方换字段
+    if low.isdigit():
+        return ""
+
+    # 2) 精确匹配（MediaInfo 的 format 字段走这里）
+    if low in _CODEC_EXACT:
+        return _CODEC_EXACT[low]
+
+    # 3) 前缀匹配（codec_id / 容器标识）
+    key = low.replace(".", "").replace("_", "").replace("-", "").replace("/", "")
     for alias, name in _CODEC_ALIAS.items():
         if key.startswith(alias):
             return name
+
+    # 4) 关键字兜底（MKV 里的 V_MPEG4/ISO/AVC 这类写法）
     u = s.upper()
-    # MediaInfo 在 MKV 里会给 V_MPEG4/ISO/AVC 这类写法
     if "AVC" in u or "H264" in u or "H.264" in u:
         return "H.264"
     if "HEVC" in u or "H265" in u or "H.265" in u:
@@ -252,6 +401,10 @@ def norm_codec(raw: str) -> str:
         return "MPEG-4"
     if "MPEG2" in u or "MPEG-2" in u:
         return "MPEG-2"
+    if "MPEG1" in u or "MPEG-1" in u:
+        return "MPEG-1"
+    if "JPEG" in u:
+        return "MJPEG"
     return u
 
 
@@ -280,8 +433,16 @@ def probe_media(path: str) -> dict:
                     info["fps"] = float(t.frame_rate or 0)
                     info["bitrate"] = int(t.bit_rate or 0)
                     info["duration"] = float(t.duration or 0) / 1000.0
-                    codec = getattr(t, "codec_id", None) or getattr(t, "format", "") or ""
-                    info["codec"] = norm_codec(str(codec))
+                    # 编码名：**优先 format**（人类可读），其次 codec_id。
+                    # codec_id 是容器相关的标识，FLV/MPEG-TS 里会是纯数字，
+                    # norm_codec 对纯数字返回空串 -> 自动落到下一个候选字段。
+                    for cand in (getattr(t, "format", None),
+                                 getattr(t, "codec_id", None),
+                                 getattr(t, "format_profile", None)):
+                        name = norm_codec(str(cand or ""))
+                        if name:
+                            info["codec"] = name
+                            break
             if general is not None:
                 if not info.get("duration"):
                     info["duration"] = float(getattr(general, "duration", 0) or 0) / 1000.0
@@ -329,8 +490,81 @@ def probe_media(path: str) -> dict:
 # 三、帧采样 + pHash + 缩略图
 # ============================================================================
 
+# ---- 抽帧策略的成本常量（实测标定，基准脚本见 tools/bench_decode.py）----
+# 两种策略的成本量级完全不同：
+#   * 逐位置 seek：成本 ≈ 采样帧数 × 每次定位开销（与视频长度基本无关）
+#   * 顺序 grab  ：成本 ≈ 总帧数 × 每帧开销（与采样帧数基本无关）
+# 所以短视频用顺序扫更快、长视频用逐位置 seek 更快。
+# 实测（1080p，12 个采样帧）：每次 seek ≈ 114 ms；每帧 grab ≈ 0.82 ms
+#   -> 交叉点 ≈ 1500 帧 ≈ 60 秒 @25fps
+# 两个常量都按像素数线性缩放。
+_SEEK_MS_PER_SAMPLE_1080P = 114.0
+_GRAB_MS_PER_FRAME_1080P = 0.82
+_REF_PIXELS_1080P = 1920 * 1080
+
+
+def _estimate_decode_cost(total: int, w: int, h: int, n: int) -> tuple:
+    """估算 (顺序扫成本, 逐位置 seek 成本)，单位是"相对耗时"，只用来比大小"""
+    scale = max(0.05, ((w or 0) * (h or 0)) / _REF_PIXELS_1080P) if w and h else 1.0
+    scan = (total or 0) * _GRAB_MS_PER_FRAME_1080P * scale
+    seek = n * _SEEK_MS_PER_SAMPLE_1080P * scale
+    return scan, seek
+
+
+def _read_frames_seek(cap, n: int, total: int) -> list:
+    """逐位置定位读取：适合长视频（只解码少量帧）"""
+    frames = []
+    for k in range(n):
+        idx = int((k + 0.5) * total / n)
+        idx = max(0, min(total - 1, idx))
+        try:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        except Exception:
+            pass
+        ok, fr = cap.read()
+        if ok and fr is not None:
+            frames.append(fr)
+    return frames
+
+
+def _read_frames_scan(cap, n: int, total: int) -> list:
+    """
+    顺序扫读：适合短视频。
+
+    用 grab() 而不是 read() —— grab 只解码、不做 BGR 色彩转换，
+    实测每帧从 7.4 ms 降到 0.82 ms（1080p），快约 9 倍。
+    取帧位置与逐位置 seek 完全一致（已用帧号核对过，误差 0）。
+    """
+    if total > 1:
+        want = sorted({max(0, min(total - 1, int((k + 0.5) * total / n))) for k in range(n)})
+    else:
+        want = [i * 30 for i in range(n)]
+    frames = []
+    i = 0
+    wi = 0
+    while wi < len(want):
+        if not cap.grab():
+            break
+        if i == want[wi]:
+            ok, fr = cap.retrieve()
+            if ok and fr is not None:
+                frames.append(fr)
+            wi += 1
+        i += 1
+        if i > 2_000_000:
+            break
+    return frames
+
+
 def _read_sample_frames(path: str, n: int):
-    """均匀读取 n 帧（先按帧号定位，失败则顺序扫读兜底）"""
+    """
+    均匀读取 n 帧。返回 (帧列表, 仍然打开的 VideoCapture 或 None)。
+
+    自适应选择后端（见上方成本常量）：
+      总帧数少 -> 顺序 grab 扫读；总帧数多 -> 逐位置 seek。
+    选错了也不致命：任何一条路取到的帧明显偏少时，会自动换另一条再试一次
+    （也顺带兜住了"某些容器不支持按帧号定位"的情况）。
+    """
     if not HAS_CV2:
         return [], None
     frames = []
@@ -339,40 +573,26 @@ def _read_sample_frames(path: str, n: int):
         return [], None
     try:
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if total > 1:
-            for k in range(n):
-                idx = int((k + 0.5) * total / n)
-                idx = max(0, min(total - 1, idx))
-                try:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                except Exception:
-                    pass
-                ok, fr = cap.read()
-                if ok and fr is not None:
-                    frames.append(fr)
-        # 定位读取不理想 -> 顺序扫读
-        if len(frames) < max(2, n // 2):
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        scan_cost, seek_cost = _estimate_decode_cost(total, w, h, n)
+        prefer_scan = scan_cost <= seek_cost
+        order = (("scan", "seek") if prefer_scan else ("seek", "scan"))
+        need = max(2, n // 2)
+
+        for mode in order:
+            if mode == "scan":
+                frames = _read_frames_scan(cap, n, total)
+            else:
+                frames = _read_frames_seek(cap, n, total)
+            if len(frames) >= need:
+                break
+            # 这条路没取够 -> 重新打开再换另一条
             frames = []
             cap.release()
             cap = cv2.VideoCapture(str(path))
             if not cap.isOpened():
                 return [], None
-            if total > 1:
-                want = [max(0, min(total - 1, int((k + 0.5) * total / n))) for k in range(n)]
-            else:
-                want = [i * 30 for i in range(n)]
-            i = 0
-            wi = 0
-            while wi < len(want):
-                ok, fr = cap.read()
-                if not ok:
-                    break
-                if i == want[wi]:
-                    frames.append(fr)
-                    wi += 1
-                i += 1
-                if i > 200000:
-                    break
     except Exception:
         pass
     return frames, cap
@@ -403,6 +623,148 @@ def _phash_int(gray):
         return val
     except Exception:
         return 0
+
+
+def _gray32(gray) -> bytes:
+    """
+    全尺寸灰度图 -> 32×32 灰度指纹（1024 字节）。
+
+    刻意【强行压成正方形、不保留宽高比】：
+    不同分辨率、带黑边/上下加边的同源视频会被归一化到同一个尺度上，
+    和 pHash 那一路（缩放到宽 256）互补。
+    """
+    try:
+        small = cv2.resize(gray, (GRAY_SIDE, GRAY_SIDE),
+                           interpolation=cv2.INTER_CUBIC)
+        return small.tobytes()
+    except Exception:
+        return b""
+
+
+def _masked_diff(a: bytes, b: bytes, ignore_black: bool, ignore_white: bool) -> tuple:
+    """
+    单帧的两张 32×32 灰度指纹 -> (平均差异率 0~1, 有效像素数)。
+
+    ★ 最关键的一点：分母是【有效像素数】，不是总像素数 1024。
+      若除以 1024，掩掉大量水印像素后差值会被稀释、相似度虚高，掩码就白做了。
+    ★ 两个文件都要判黑/白（a 或 b 任一为黑就排除），
+      因为水印可能只存在于其中一个文件里。
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0, 0
+    if HAS_NUMPY:
+        aa = np.frombuffer(a, dtype=np.uint8).astype(np.int16)
+        bb = np.frombuffer(b, dtype=np.uint8).astype(np.int16)
+        mask = np.ones(aa.shape, dtype=bool)
+        if ignore_black:
+            mask &= (aa > BLACK_PIXEL_LIMIT) & (bb > BLACK_PIXEL_LIMIT)
+        if ignore_white:
+            mask &= (aa < WHITE_PIXEL_LIMIT) & (bb < WHITE_PIXEL_LIMIT)
+        valid = int(mask.sum())
+        if valid < MASK_MIN_VALID:
+            return 0.0, 0          # 有效像素太少 -> 该位置不可信，跳过
+        diff = int(np.abs(aa[mask] - bb[mask]).sum())
+        return diff / valid / 255.0, valid
+    # 无 numpy 时的纯 Python 兜底
+    diff = 0
+    valid = 0
+    for x, y in zip(a, b):
+        if ignore_black and (x <= BLACK_PIXEL_LIMIT or y <= BLACK_PIXEL_LIMIT):
+            continue
+        if ignore_white and (x >= WHITE_PIXEL_LIMIT or y >= WHITE_PIXEL_LIMIT):
+            continue
+        diff += abs(x - y)
+        valid += 1
+    if valid < MASK_MIN_VALID:
+        return 0.0, 0
+    return diff / valid / 255.0, valid
+
+
+def masked_gray_distance(a_frames, b_frames, ignore_black: bool = True,
+                         ignore_white: bool = True, trim: bool = True) -> tuple:
+    """
+    两组 32×32 灰度指纹的逐位置掩码比对。
+
+    返回 (差异率 0~1, 参与计数的位置数)；位置数为 0 表示无法判定（应视为"不是重复"）。
+
+    与 pHash 通道一样做了两层时序抗干扰，保证两个通道的容忍度尽量一致：
+      1) 相对位置对齐 + ±1 帧容差（应对转码/裁切造成的帧数微变）；
+      2) 截尾平均（丢掉差异最大的约 20% 帧），应对"片头不同""个别帧带水印"。
+    """
+    n = min(len(a_frames), len(b_frames))
+    if n == 0:
+        return 1.0, 0
+    if n == 1:
+        A, B = [a_frames[0]], [b_frames[0]]
+    else:
+        ia = [round(i * (len(a_frames) - 1) / (n - 1)) for i in range(n)]
+        ib = [round(i * (len(b_frames) - 1) / (n - 1)) for i in range(n)]
+        A = [a_frames[i] for i in ia]
+        B = [b_frames[i] for i in ib]
+
+    best = None
+    counted = 0
+    for shift in ((-1, 0, 1) if n > 1 else (0,)):
+        vals = []
+        for i in range(n):
+            k = i + shift
+            if not (0 <= k < n):
+                continue
+            d, valid = _masked_diff(A[i], B[k], ignore_black, ignore_white)
+            if valid > 0:
+                vals.append(d)
+        if not vals:
+            continue
+        vals.sort()
+        if trim and len(vals) >= 5:
+            drop = min(3, int(len(vals) * 0.2))
+            vals = vals[: len(vals) - drop]
+        m = sum(vals) / len(vals)
+        if best is None or m < best:
+            best = m
+            counted = len(vals)
+    if best is None:
+        return 1.0, 0
+    return best, counted
+
+
+def compare_pair(a, b, sim_thr: float = DEFAULT_THRESHOLD,
+                 gray_thr: float = DEFAULT_THRESHOLD_GRAY,
+                 use_gray: bool = True, ignore_black: bool = True,
+                 ignore_white: bool = True) -> tuple:
+    """
+    判断两个视频是否同源。【两个通道取 OR：任一命中即算重复】
+
+      * pHash 通道  —— 对"整体调色 / 亮度偏移 / 分辨率变化"鲁棒，
+                       但对大面积规律性干扰（水印、黑边）敏感；
+      * 灰度掩码通道 —— 对水印 / 黑边 / 烧制字幕鲁棒（靠掩码，而不是放宽阈值），
+                       但对整体调色更敏感。
+
+    两条通道的失效场景互补，所以任一命中即判重，把漏检压到最低。
+
+    返回 (是否判重, 相似度 0~1, 命中通道名)
+    """
+    d_hash = hash_distance(getattr(a, "hashes", None) or [], getattr(b, "hashes", None) or [])
+    sim_hash = max(0.0, 1.0 - d_hash / 64.0)
+    hit_hash = sim_hash >= float(sim_thr)
+
+    sim_gray = -1.0
+    if use_gray:
+        ga = getattr(a, "gray", None) or []
+        gb = getattr(b, "gray", None) or []
+        if ga and gb:
+            dg, npos = masked_gray_distance(ga, gb, ignore_black, ignore_white)
+            if npos > 0:
+                sim_gray = max(0.0, 1.0 - dg)
+    hit_gray = sim_gray >= float(gray_thr)
+
+    if hit_hash and hit_gray:
+        return True, max(sim_hash, sim_gray), "两种"
+    if hit_hash:
+        return True, sim_hash, "pHash"
+    if hit_gray:
+        return True, sim_gray, "灰度"
+    return False, max(sim_hash, sim_gray), ""
 
 
 def _grab_frame_at_frac(cap, frac: float):
@@ -464,7 +826,7 @@ def _find_cover_frame(cap):
 
 def compute_features(path: str, sample_n: int = SAMPLE_FRAMES_DEFAULT) -> dict:
     """读取采样帧 -> 计算每帧 pHash + 生成三张缩略图（封面 / 内容帧 / 中间帧）"""
-    res = {"hashes": [], "thumb": "", "thumb_mid": "", "cover": "",
+    res = {"hashes": [], "gray": [], "thumb": "", "thumb_mid": "", "cover": "",
            "width": 0, "height": 0, "fps": 0.0, "duration": 0.0, "error": ""}
     if not HAS_CV2 or not HAS_PIL:
         res["error"] = "缺少 opencv-python / pillow，无法解析画面"
@@ -487,10 +849,13 @@ def compute_features(path: str, sample_n: int = SAMPLE_FRAMES_DEFAULT) -> dict:
         res["fps"] = round(fps, 3)
         if total > 0 and fps > 0:
             res["duration"] = total / fps
-        # 逐帧 pHash（统一缩放到宽 256 灰度图，抗缩放差异）
+        # 逐帧产出两种指纹（共用同一批解码帧，几乎零额外抽帧成本）：
+        #   ① 32×32 灰度  —— 掩码比对用，抗水印/黑边
+        #   ② 64bit pHash —— 缩放到宽 256 灰度后算，抗整体调色/亮度偏移
         for fr in frames:
             try:
-                gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+                gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)   # 只算一次
+                res["gray"].append(_gray32(gray))
                 gh, gw = gray.shape[:2]
                 if gw > 256:
                     gray = cv2.resize(gray, (256, max(2, int(256 * gh / gw))),
@@ -588,17 +953,179 @@ def similarity_of(a, b) -> float:
     return max(0.0, 1.0 - hash_distance(a, b) / 64.0)
 
 
+# ============================================================================
+# 四之二、质量判据：选出「建议保留」的那个（逐级淘汰 + 近似平局容差）
+#
+# 为什么不用"分辨率×码率"这种单一加权分：
+#   1) 加权求和会出现"某一项数值巨大就压制其他所有项"的陷阱；
+#   2) 时长、码率这类近似连续的数值"几乎永远不相等"，
+#      没有容差时一个【只长 200 毫秒】的视频就能压过【分辨率高一倍】的视频。
+# 做法：按判据优先级逐级淘汰，每一级只在上一步打平的候选里继续比，
+#      一旦出现唯一赢家就停；判据本身带容差，让"实际上差不多"的值进入下一级。
+# ============================================================================
+
+def bits_per_pixel(v) -> float:
+    """
+    每像素位数 = 码率 / (宽 × 高 × 帧率)。
+    衡量"画面实际信息密度"最准的单指标，比裸码率有用得多
+    （同样是 2 Mbps，1080p 和 480p 的画质完全不是一回事）。
+    """
+    try:
+        px = (v.width or 0) * (v.height or 0)
+        fps = v.fps or 0.0
+        if px <= 0 or fps <= 0 or not v.bitrate:
+            return 0.0
+        return float(v.bitrate) / (px * float(fps))
+    except Exception:
+        return 0.0
+
+
+def _near(a, b, abs_tol=0.0, rel_tol=0.0) -> bool:
+    """近似平局：绝对容差或相对容差任一满足即算平局"""
+    if a == b:
+        return True
+    try:
+        fa, fb = float(a), float(b)
+    except Exception:
+        return False
+    d = abs(fa - fb)
+    if abs_tol and d <= abs_tol:
+        return True
+    base = max(abs(fa), abs(fb))
+    return bool(rel_tol and base and d <= rel_tol * base)
+
+
+# 判据表：顺序即优先级（高者先比）。第三项是"近似平局"判定函数。
+# 每项格式：(判据名, 取值函数, 平局判定, 界面展示用的短语)
+QUALITY_CRITERIA = (
+    ("时长",       lambda v: v.duration or 0.0,
+     lambda a, b: _near(a, b, abs_tol=1.0, rel_tol=0.01), "时长更长"),
+    ("分辨率",     lambda v: (v.width or 0) * (v.height or 0),
+     lambda a, b: _near(a, b, rel_tol=0.03), "分辨率更高"),
+    ("每像素位数", lambda v: bits_per_pixel(v),
+     lambda a, b: _near(a, b, rel_tol=0.05), "画质更好"),
+    ("码率",       lambda v: float(v.bitrate or 0),
+     lambda a, b: _near(a, b, rel_tol=0.05), "码率更高"),
+    ("帧率",       lambda v: float(v.fps or 0.0),
+     lambda a, b: _near(a, b, abs_tol=0.5), "帧率更高"),
+    ("文件大小",   lambda v: float(v.size or 0), None, "文件更完整"),
+)
+
+# 「编码质量下限」门。
+#
+# 为什么需要它：分辨率和码率之间**没有普适的权衡** ——
+#   * 分辨率高但码率极低 = 糊片（压缩痕迹严重，观感很差）；
+#   * 分辨率低但码率很高 = 干净但细节少。
+# 单纯按某一项硬排序，必然在某一类场景上给出荒谬结果
+# （例如"200 kbps 的 1080p"压过"8 Mbps 的 720p"）。
+# 所以这里不假装能比较两种画质取向，只做一件事：
+#   **把"明确糊到不该被建议保留"的候选先淘汰掉**，剩下的再走正常判据。
+# 只有组里存在"不算低质"的候选时才淘汰；如果全都是低质，就谁都不淘汰，
+# 照常往下比（否则会出现无人可选的死局）。
+LOW_BPP_GATE = 0.03      # 每像素每帧的比特数下限（0.03 ≈ 1080p25 的 1.6 Mbps）
+
+
+def pick_keeper(videos) -> tuple:
+    """
+    从一组视频里选出「建议保留」的那个。
+
+    两步：
+      1. 先过「编码质量下限」门：组里若存在非低质的候选，就把低质的排除；
+      2. 再按判据逐级淘汰：每一级只在上一步打平的候选里继续比，
+         一旦出现唯一赢家就停。
+
+    返回 (保留项, 理由短语)。理由短语可直接用于界面，例如"时长更长"。
+    """
+    cands = [v for v in videos if v is not None]
+    if not cands:
+        return None, ""
+    if len(cands) == 1:
+        return cands[0], "组内唯一"
+
+    # ---- 第 1 步：编码质量下限门 ----
+    bpps = [bits_per_pixel(v) for v in cands]
+    if any(b >= LOW_BPP_GATE for b in bpps):
+        healthy = [v for v in cands if bits_per_pixel(v) >= LOW_BPP_GATE]
+        if len(healthy) == 1:
+            return healthy[0], "编码质量更好"
+        if len(healthy) > 1:
+            cands = healthy
+    # 全都是低质 -> 不淘汰，继续往下比
+
+    # ---- 第 2 步：判据逐级淘汰 ----
+    for name, acc, tie, phrase in QUALITY_CRITERIA:
+        if len(cands) <= 1:
+            break
+        try:
+            best = max(cands, key=acc)
+            best_val = acc(best)
+        except Exception:
+            continue
+        if tie is None:
+            return best, phrase                 # 最后一级：不再判平局
+        try:
+            tied = [v for v in cands if tie(acc(v), best_val)]
+        except Exception:
+            return best, phrase
+        if len(tied) <= 1:
+            return best, phrase                 # 出现唯一赢家
+        cands = tied                            # 打平者进入下一级
+
+    return cands[0], "各项相当"
+
+
+def pick_keeper_path(paths, items) -> str:
+    """按质量判据从一组路径里选出建议保留项（返回路径）"""
+    objs = [items[p] for p in paths if p in items]
+    if not objs:
+        return paths[0] if paths else ""
+    keeper, _why = pick_keeper(objs)
+    return keeper.path if keeper is not None else (paths[0] if paths else "")
+
+
+def order_group_by_quality(paths, items) -> list:
+    """
+    组内显示顺序：建议保留项排第一，其余按质量粗排降序。
+    这样"★ 标记"和"第一行"永远指向同一个文件，不会让人看错。
+    """
+    paths = [p for p in paths if p in items]
+    if not paths:
+        return []
+    keeper = pick_keeper_path(paths, items)
+    rest = [p for p in paths if p != keeper]
+
+    def rough_key(p):
+        v = items[p]
+        return ((v.duration or 0.0), (v.width or 0) * (v.height or 0),
+                bits_per_pixel(v), v.bitrate or 0, v.fps or 0.0, v.size or 0)
+
+    try:
+        rest.sort(key=rough_key, reverse=True)
+    except Exception:
+        pass
+    return ([keeper] if keeper else []) + rest
+
+
 def group_videos(items, sim_thr=DEFAULT_THRESHOLD, tol_ratio=0.10, tol_sec=5.0,
-                 progress=None, cancel_flag=None):
+                 progress=None, cancel_flag=None, reject_log=None,
+                 gray_thr=DEFAULT_THRESHOLD_GRAY, use_gray=True,
+                 ignore_black=True, ignore_white=True, channel_log=None):
     """
     自动分组：并查集 + 按时长排序的滑窗预筛（避免 O(n^2) 全量比较）
     返回 (groups, singles, sims)：
       groups  —— [[item_index, ...], ...]，按组内文件数降序；
       singles —— [item_index, ...] 未发现重复的；
       sims    —— 与 groups 一一对应的组内平均相似度（0~1）
+
+    reject_log ：可选，传入 list 时把「被组代表互验拦下的合并」写进去，
+                 每项为 (代表A索引, 代表B索引, 距离)，便于排查"为什么没并组"。
+    channel_log：可选，传入 dict 时统计各命中通道的次数（pHash / 灰度 / 两种）。
     """
     n = len(items)
     parent = list(range(n))
+    members = {i: [i] for i in range(n)}   # 根 -> 成员索引（用于算组代表）
+    rep_cache: dict = {}                   # 根 -> 组代表索引
+    rejected = 0
 
     def find(x):
         while parent[x] != x:
@@ -606,10 +1133,50 @@ def group_videos(items, sim_thr=DEFAULT_THRESHOLD, tol_ratio=0.10, tol_sec=5.0,
             x = parent[x]
         return x
 
-    def union(x, y):
+    def rep_of(root: int) -> int:
+        """组代表 = 该组里由质量判据选出的「建议保留」项（与界面 ★ 一致）"""
+        r = rep_cache.get(root)
+        if r is not None:
+            return r
+        group = members.get(root) or [root]
+        keeper, _why = pick_keeper([items[t] for t in group])
+        idx = next((t for t in group if items[t] is keeper), group[0])
+        rep_cache[root] = idx
+        return idx
+
+    def union(x, y) -> bool:
+        """
+        带「组代表互验」的合并。
+
+        纯并查集有传递性：A~B 且 B~C 就会把 A、C 也连成一组，**哪怕 A 和 C
+        毫无关系**。在"同一博主的不同视频""同一部剧的不同集""同一游戏连续录屏"
+        这类目录里，B 成了桥梁，会把整个目录并成一个巨大的"重复组"，
+        用户面对几十个文件的组无法判断，功能事实上失效。
+
+        所以合并两组之前，先验证两组各自的【代表文件】是否互相相似；
+        不相似就放弃合并。（若两个代表恰好就是本次已比较过的这一对，则无需重复验证）
+        """
+        nonlocal rejected
         rx, ry = find(x), find(y)
-        if rx != ry:
-            parent[ry] = rx
+        if rx == ry:
+            return False
+        rx_rep, ry_rep = rep_of(rx), rep_of(ry)
+        if not (rx_rep == x and ry_rep == y):
+            hit, sim, _ch = compare_pair(items[rx_rep], items[ry_rep], sim_thr,
+                                         gray_thr, use_gray, ignore_black, ignore_white)
+            if not hit:
+                rejected += 1
+                if reject_log is not None:
+                    reject_log.append((rx_rep, ry_rep, round((1.0 - sim) * 64.0, 1)))
+                return False
+        # 按成员数合并（小树挂大树），让 find 的路径更短
+        if len(members.get(ry, ())) > len(members.get(rx, ())):
+            rx, ry = ry, rx
+        parent[ry] = rx
+        members[rx] = list(members.get(rx, ())) + list(members.pop(ry, ()))
+        rep_cache.pop(rx, None)     # 组合变了，代表要重算
+        rep_cache.pop(ry, None)
+        return True
 
     cand = [i for i in range(n) if len(items[i].hashes) >= 2]
     cand.sort(key=lambda i: items[i].duration or 0.0)
@@ -631,10 +1198,16 @@ def group_videos(items, sim_thr=DEFAULT_THRESHOLD, tol_ratio=0.10, tol_sec=5.0,
                 # 按时长排序，一旦超出即跳出
                 break
             total_cmp += 1
-            d = hash_distance(items[i].hashes, items[j].hashes)
-            if d <= max_dist:
+            # 提前退出：单帧 pHash 距离已经远远超出阈值时，不必再算掩码通道
+            if hash_distance(items[i].hashes, items[j].hashes) > max_dist + 24:
+                continue
+            hit, sim, chan = compare_pair(items[i], items[j], sim_thr, gray_thr,
+                                          use_gray, ignore_black, ignore_white)
+            if hit:
                 union(i, j)
-                pair_sims[(i, j)] = 1.0 - d / 64.0
+                pair_sims[(i, j)] = sim
+                if channel_log is not None and chan:
+                    channel_log[chan] = channel_log.get(chan, 0) + 1
         if progress and (p % 25 == 0):
             progress(int(p * 100 / max(1, len(cand))))
 
@@ -645,13 +1218,21 @@ def group_videos(items, sim_thr=DEFAULT_THRESHOLD, tol_ratio=0.10, tol_sec=5.0,
     groups = [g for g in buckets.values() if len(g) > 1]
     singles = [i for g in buckets.values() if len(g) == 1 for i in g]
 
-    # 组内按 分辨率*码率 降序（越靠前越可能是"原片"）
-    def quality(idx):
+    # 组内顺序：把「建议保留」项放第一位（用质量判据逐级淘汰选出），
+    # 其余按质量粗排降序 —— 与 GUI 里 ★ 标记指向的文件保持一致
+    def _rough_quality(idx):
         v = items[idx]
-        return ((v.width or 0) * (v.height or 0), v.bitrate or 0, v.size or 0)
+        return ((v.duration or 0.0), (v.width or 0) * (v.height or 0),
+                bits_per_pixel(v), v.bitrate or 0, v.fps or 0.0, v.size or 0)
 
     for g in groups:
-        g.sort(key=quality, reverse=True)
+        if len(g) <= 1:
+            continue
+        keeper, _why = pick_keeper([items[i] for i in g])
+        keeper_idx = next((i for i in g if items[i] is keeper), g[0])
+        rest = [i for i in g if i != keeper_idx]
+        rest.sort(key=_rough_quality, reverse=True)
+        g[:] = [keeper_idx] + rest
 
     # 组内平均相似度（仅用于展示）
     group_info = []
@@ -686,7 +1267,8 @@ class VideoItem:
     fps: float = 0.0
     bitrate: int = 0
     codec: str = ""
-    hashes: list = field(default_factory=list)
+    hashes: list = field(default_factory=list)     # 每帧 64bit pHash
+    gray: list = field(default_factory=list)       # 每帧 32×32 灰度指纹（bytes，掩码比对用）
     thumb: str = ""          # 内容帧缩略图（1/4 处）
     thumb_mid: str = ""      # 中间帧缩略图（1/2 处）
     cover: str = ""          # 封面帧缩略图（首帧，自动避开黑场/纯色）
@@ -711,7 +1293,42 @@ _CACHE_LOCK = threading.Lock()
 
 def cache_key(path: str, st: os.stat_result) -> str:
     """缓存键含版本号：缩略图/特征结构升级后旧缓存自动失效，不会被误用"""
-    return f"v2|{path}|{st.st_size}|{int(st.st_mtime)}"
+    return f"{CACHE_VER}|{path}|{st.st_size}|{int(st.st_mtime)}"
+
+
+def encode_gray(frames: list) -> str:
+    """
+    把 32×32 灰度帧序列压成一段 base64 字符串，存进 JSON 缓存。
+    12 帧原始 12 KB，zlib 压缩后约 3~5 KB（相邻像素高度相关，压得动）。
+    """
+    if not frames:
+        return ""
+    try:
+        import base64
+        import zlib
+
+        blob = b"".join(f for f in frames if f)
+        if not blob:
+            return ""
+        return base64.b64encode(zlib.compress(blob, 6)).decode("ascii")
+    except Exception:
+        return ""
+
+
+def decode_gray(s: str) -> list:
+    """还原 encode_gray 的结果；数据异常时返回空列表（外层会当作无掩码通道处理）"""
+    if not s:
+        return []
+    try:
+        import base64
+        import zlib
+
+        blob = zlib.decompress(base64.b64decode(s.encode("ascii")))
+        if not blob or len(blob) % GRAY_LEN:
+            return []
+        return [blob[i:i + GRAY_LEN] for i in range(0, len(blob), GRAY_LEN)]
+    except Exception:
+        return []
 
 
 def load_cache() -> int:
@@ -777,6 +1394,8 @@ def process_one(path: str, sample_n: int = SAMPLE_FRAMES_DEFAULT, use_cache: boo
         if hit and (not hit.get("thumb") or Path(str(hit["thumb"])).exists()) \
                 and (not hit.get("cover") or Path(str(hit["cover"])).exists()):
             r = dict(hit)
+            # 缓存里存的是压缩串，取出来后还原成帧列表
+            r["gray"] = decode_gray(r.pop("gray_b64", "") or "")
             r["from_cache"] = True
             return r
 
@@ -793,6 +1412,7 @@ def process_one(path: str, sample_n: int = SAMPLE_FRAMES_DEFAULT, use_cache: boo
         "bitrate": int(meta.get("bitrate") or 0),
         "codec": meta.get("codec") or "",
         "hashes": feats.get("hashes") or [],
+        "gray": feats.get("gray") or [],
         "thumb": feats.get("thumb") or "",
         "thumb_mid": feats.get("thumb_mid") or "",
         "cover": feats.get("cover") or "",
@@ -802,8 +1422,12 @@ def process_one(path: str, sample_n: int = SAMPLE_FRAMES_DEFAULT, use_cache: boo
     # 码率缺失时用 文件大小/时长 估算
     if not res["bitrate"] and res["duration"] > 0:
         res["bitrate"] = int(res["size"] * 8 / res["duration"])
+    # 入缓存：灰度帧压成 base64 串（运行时仍用解码后的列表，省内存也省 JSON 体积）
+    cached = dict(res)
+    cached["gray_b64"] = encode_gray(res.get("gray") or [])
+    cached.pop("gray", None)
     with _CACHE_LOCK:
-        _CACHE[key] = res
+        _CACHE[key] = cached
     return res
 
 
@@ -963,6 +1587,7 @@ class VideoDedupApp:
         self.singles: list = []        # [path, ...]
         self.group_sims: list = []     # 与 groups 一一对应的平均相似度
         self.best_of: dict = {}        # id(group) -> 建议保留的文件路径
+        self.keeper_reason: dict = {}  # 路径 -> 决定它的质量判据名（用于展示理由）
         self.scan_root: str = ""
         self.q: queue.Queue = queue.Queue()
         self.stop_flag = threading.Event()
@@ -985,6 +1610,12 @@ class VideoDedupApp:
         self.threshold_var = tk.DoubleVar(value=float(self._cfg("threshold", DEFAULT_THRESHOLD)))
         self.thr_hint = tk.StringVar(value="")
         self._update_thr_hint()
+        # 灰度掩码通道（抗水印/黑边）：默认开启
+        self.gray_thr_var = tk.DoubleVar(
+            value=float(self._cfg("gray_threshold", DEFAULT_THRESHOLD_GRAY)))
+        self.ignore_bw_var = tk.BooleanVar(value=bool(self._cfg("ignore_bw", True)))
+        self.gray_hint = tk.StringVar(value="")
+        self._update_gray_hint()
         self.tol_ratio_var = tk.StringVar(value="10")
         self.tol_sec_var = tk.StringVar(value="5")
         self.sample_var = tk.StringVar(value=str(SAMPLE_FRAMES_DEFAULT))
@@ -1014,7 +1645,38 @@ class VideoDedupApp:
         else:
             level = "宽松：更灵敏，可能多分组"
         try:
-            self.thr_hint.set(f"≈ 平均距离 ≤ {d:.1f}/64　{level}")
+            # 有掩码通道兜底时，即使用户把阈值调得很严，带水印的副本也不会漏
+            # （实测：阈值 0.92 时水印的 pHash 只有 86.6%，靠灰度掩码通道捞回）
+            tail = "　（水印/黑边由掩码通道负责，调严也不会漏）" if t >= 0.88 else ""
+            self.thr_hint.set(f"≈ 平均距离 ≤ {d:.1f}/64　{level}{tail}")
+        except Exception:
+            pass
+        except Exception:
+            pass
+    def _update_gray_hint(self):
+        """把灰度通道阈值翻译成"平均逐像素差异"说明"""
+        try:
+            t = float(self.gray_thr_var.get())
+        except Exception:
+            return
+        if not self.ignore_bw_var.get():
+            txt = "未启用掩码（关掉「忽略黑/白像素」时该通道作用有限）"
+        elif t >= 0.95:
+            txt = "很严格"
+        elif t >= 0.86:
+            txt = "标准：可认水印/黑边副本"
+        else:
+            txt = "宽松：更灵敏，可能多分组"
+        try:
+            self.gray_hint.set(f"≈ 平均像素差 ≤ {(1 - t) * 255:.0f}/255　{txt}")
+        except Exception:
+            pass
+
+    def _on_gray_toggle(self):
+        """勾/去勾「忽略黑/白像素」：更新提示文案并刷新列表"""
+        self._update_gray_hint()
+        try:
+            self.render()
         except Exception:
             pass
 
@@ -1033,6 +1695,8 @@ class VideoDedupApp:
                 json.dump({
                     "last_folder": self.folder_var.get(),
                     "threshold": float(self.threshold_var.get()),
+                    "gray_threshold": float(self.gray_thr_var.get()),
+                    "ignore_bw": bool(self.ignore_bw_var.get()),
                     "tol_ratio": self.tol_ratio_var.get(),
                     "tol_sec": self.tol_sec_var.get(),
                     "sample": self.sample_var.get(),
@@ -1113,6 +1777,20 @@ class VideoDedupApp:
         ttk.Label(row2, text="（点列标题可按该列排序，如「时长」）", foreground="#666666").pack(side="left", padx=(6, 0))
         ttk.Button(row2, text="清理缩略图缓存", command=self.clear_thumb_cache).pack(side="left", padx=10)
         ttk.Label(row2, textvariable=self.option_hint, foreground="#666666").pack(side="left")
+
+        row3 = ttk.Frame(opt)
+        row3.pack(fill="x", pady=(6, 0))
+        ttk.Label(row3, text="抗水印/黑边：").pack(side="left")
+        ttk.Checkbutton(row3, text="忽略黑/白像素", variable=self.ignore_bw_var,
+                        command=self._on_gray_toggle).pack(side="left")
+        ttk.Label(row3, text="　灰度通道阈值:").pack(side="left")
+        tk.Scale(row3, from_=0.60, to=1.00, resolution=0.01, orient="horizontal",
+                 variable=self.gray_thr_var, length=150, showvalue=True,
+                 command=lambda *_: self._update_gray_hint()
+                 ).pack(side="left", padx=(2, 2))
+        ttk.Label(row3, textvariable=self.gray_hint, foreground="#a04000").pack(side="left")
+        ttk.Label(row3, text="　（水印副本靠「忽略黑/白像素」识别，不必放宽上面的相似度阈值）",
+                  foreground="#666666").pack(side="left")
 
         # ===== 中部：列表 + 预览 =====
         # 注意：列表区的 pack() 放在最后调用，这样"操作区/状态栏"能先占到空间，
@@ -1372,6 +2050,9 @@ class VideoDedupApp:
             "sample_n": int(_f(self.sample_var, SAMPLE_FRAMES_DEFAULT, 4, 40)),
             "workers": int(_f(self.workers_var, 4, 1, 16)),
             "sim_thr": _f(self.threshold_var, DEFAULT_THRESHOLD, 0.0, 1.0),
+            "gray_thr": _f(self.gray_thr_var, DEFAULT_THRESHOLD_GRAY, 0.0, 1.0),
+            "use_gray": True,          # 灰度通道始终启用，掩码由 ignore_bw 控制
+            "ignore_bw": bool(self.ignore_bw_var.get()),
             "tol_ratio": _f(self.tol_ratio_var, 10.0, 0.0) / 100.0,
             "tol_sec": _f(self.tol_sec_var, 5.0, 0.0),
         }
@@ -1458,11 +2139,15 @@ class VideoDedupApp:
                     width=int(r.get("width") or 0),
                     height=int(r.get("height") or 0),
                     bitrate=int(r.get("bitrate") or 0),
+                    fps=float(r.get("fps") or 0),
                     hashes=r.get("hashes") or [],
+                    gray=r.get("gray") or [],
                 ))
             groups, singles, gsim = group_videos(
                 items, opts["sim_thr"], opts["tol_ratio"], opts["tol_sec"],
-                cancel_flag=self.stop_flag)
+                cancel_flag=self.stop_flag,
+                gray_thr=opts["gray_thr"], use_gray=opts["use_gray"],
+                ignore_black=opts["ignore_bw"], ignore_white=opts["ignore_bw"])
             groups = [[items[i].path for i in g] for g in groups]
             singles = [items[i].path for i in singles]
             self.q.put(("done", groups, singles, gsim, time.time() - self.scan_start_ts))
@@ -1531,6 +2216,7 @@ class VideoDedupApp:
         v.bitrate = int(payload.get("bitrate") or 0)
         v.codec = payload.get("codec") or ""
         v.hashes = payload.get("hashes") or []
+        v.gray = payload.get("gray") or []
         v.thumb = payload.get("thumb") or ""
         v.thumb_mid = payload.get("thumb_mid") or ""
         v.cover = payload.get("cover") or ""
@@ -1595,11 +2281,18 @@ class VideoDedupApp:
     def _iid_of(self, path: str) -> str:
         return "V::" + path
 
-    def _group_quality_key(self, path: str):
-        v = self.items.get(path)
-        if v is None:
-            return (0, 0, 0)
-        return ((v.width or 0) * (v.height or 0), v.bitrate or 0, v.size or 0)
+    def _order_group(self, paths: list) -> list:
+        """组内顺序：建议保留项排第一，其余按质量降序（与 ★ 标记一致）"""
+        return order_group_by_quality(paths, self.items)
+
+    def _keeper_of(self, paths: list) -> str:
+        """选出「建议保留」项；同时把决定它的判据记下来，用于界面展示理由"""
+        objs = [self.items[p] for p in paths if p in self.items]
+        keeper, why = pick_keeper(objs)
+        if keeper is not None:
+            self.keeper_reason[keeper.path] = why
+            return keeper.path
+        return paths[0] if paths else ""
 
     def render(self):
         """按当前显示方式与排序列重建列表"""
@@ -1608,12 +2301,13 @@ class VideoDedupApp:
         self.iid_to_path.clear()
         view = self.filter_var.get()
 
-        # 每个重复组的"建议保留项"= 分辨率×码率最高的那个（与显示排序无关）
+        # 每个重复组的"建议保留项"（与显示排序无关，由质量判据决定）
         self.best_of = {}
+        self.keeper_reason = {}
         for g in self.groups:
             gg = [p for p in g if p in self.items]
             if len(gg) > 1:
-                self.best_of[id(g)] = max(gg, key=self._group_quality_key)
+                self.best_of[id(g)] = self._keeper_of(gg)
 
         if view == VIEW_TILE:
             self._render_tile()
@@ -1631,8 +2325,7 @@ class VideoDedupApp:
                 continue
             best = self.best_of.get(id(g))
             # 默认顺序：清晰度降序；选了排序列：按该列排序（组内）
-            ordered = self._sort_paths(gg) if self.sort_col else \
-                sorted(gg, key=self._group_quality_key, reverse=True)
+            ordered = self._sort_paths(gg) if self.sort_col else self._order_group(gg)
             if self.sort_col and best:
                 # 排序时也保证"建议保留项"能被认出来（用 ★ 标记，不改变顺序）
                 pass
@@ -1661,11 +2354,16 @@ class VideoDedupApp:
             sim = self.group_sims[gi] if gi < len(self.group_sims) else 0.0
             sim_txt = f"相似度 {sim:.0%}" if sim else "已分组"
             best_name = self.items[best].name if best and best in self.items else "-"
+            why = self.keeper_reason.get(best, "")
+            # 把"由哪个判据决定"显示出来，用户才能判断这个建议是否合理
+            best_txt = (f"建议保留：{best_name}（{why}）"
+                        if why and why not in ("组内唯一", "各项相当")
+                        else f"建议保留：{best_name}")
             self.tree.insert("", "end", iid=pid, text="", open=True,
                              values=(self._group_check_state(gg),
                                      f"〔疑似重复组 {idx + 1}〕{len(gg)} 个文件　可释放约 {human_size(saving)}",
                                      f"{len(gg)} 个", human_size(sum(sizes)),
-                                     sim_txt, "", "", f"建议保留：{best_name}",
+                                     sim_txt, "", "", best_txt,
                                      "点最左侧勾选框可整组勾选 / 取消"),
                              tags=(TAG_GROUP,))
             for p in ordered:
@@ -1786,17 +2484,20 @@ class VideoDedupApp:
         self._sync_check_column()
 
     def select_worse_in_groups(self):
-        """每个重复组：勾选除"清晰度最高"以外的全部（也就是保留第一个）"""
+        """每个重复组：勾选除「建议保留」以外的全部（保留项由质量判据逐级淘汰选出）"""
         n = 0
         for g in self.groups:
             gg = [p for p in g if p in self.items]
             if len(gg) < 2:
                 continue
-            gg = sorted(gg, key=self._group_quality_key, reverse=True)
-            for p in gg[1:]:
-                self.checked.add(p)
-                n += 1
-            self.checked.discard(gg[0])
+            ordered = self._order_group(gg)
+            keeper = ordered[0] if ordered else None
+            for p in gg:
+                if p == keeper:
+                    self.checked.discard(p)
+                else:
+                    self.checked.add(p)
+                    n += 1
         self._sync_check_column()
         self.status_var.set(f"已勾选各组中除“建议保留”外的 {n} 个文件；请确认后再执行操作。")
 
@@ -1850,7 +2551,7 @@ class VideoDedupApp:
                 best = self.best_of.get(id(g))
                 break
         if best is None:
-            best = max(members, key=self._group_quality_key)
+            best = self._keeper_of(members)
         for p in members:
             if p == best:
                 self.checked.discard(p)
@@ -2194,8 +2895,10 @@ class VideoDedupApp:
 # ============================================================================
 
 def run_cli(args) -> int:
+    # 只改错误处理、不改编码：保留控制台自身的编码，中文才不会变乱码，
+    # 同时 GBK 里没有的字符退化成 '?' 而不是抛 UnicodeEncodeError（见 init_console 的说明）
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(errors="replace")
     except Exception:
         pass
     folder = args.scan
@@ -2227,7 +2930,8 @@ def run_cli(args) -> int:
                 duration=float(r.get("duration") or 0), width=int(r.get("width") or 0),
                 height=int(r.get("height") or 0), fps=float(r.get("fps") or 0),
                 bitrate=int(r.get("bitrate") or 0), codec=r.get("codec") or "",
-                hashes=r.get("hashes") or [], thumb=r.get("thumb") or "",
+                hashes=r.get("hashes") or [], gray=r.get("gray") or [],
+                thumb=r.get("thumb") or "",
                 thumb_mid=r.get("thumb_mid") or "", cover=r.get("cover") or "",
                 error=r.get("error") or "", processed=True))
             done += 1
@@ -2236,21 +2940,37 @@ def run_cli(args) -> int:
     save_cache()
 
     tol_ratio = args.tol / 100.0
-    groups, singles, gsim = group_videos(items, args.threshold, tol_ratio, args.tol_sec)
+    mask_on = not args.no_mask
+    channel_hits: dict = {}
+    groups, singles, gsim = group_videos(
+        items, args.threshold, tol_ratio, args.tol_sec,
+        gray_thr=args.gray_threshold, use_gray=True,
+        ignore_black=mask_on, ignore_white=mask_on, channel_log=channel_hits)
     idx = {v.path: v for v in items}
     print(f"\n用时 {time.time() - t0:.1f} 秒；共 {len(items)} 个视频。")
-    print(f"判定阈值：相似度 ≥ {args.threshold:.0%}（平均汉明距离 ≤ {max_distance_of(args.threshold):.1f}/64）；"
+    print(f"判定阈值：pHash 相似度 ≥ {args.threshold:.0%}（平均汉明距离 ≤ {max_distance_of(args.threshold):.1f}/64）"
+          f"　或　灰度掩码相似度 ≥ {args.gray_threshold:.0%}"
+          f"（忽略黑/白像素：{'开' if mask_on else '关'}）；"
           f"时长容差 {args.tol:g}% 或 {args.tol_sec:g} 秒")
+    if channel_hits:
+        hit_txt = "、".join(f"{k} {v} 对" for k, v in sorted(channel_hits.items()))
+        print(f"命中通道统计：{hit_txt}")
     print(f"发现重复组 {len(groups)} 组（判定为同源的 {sum(len(g) for g in groups)} 个文件），"
           f"唯一视频 {len(singles)} 个。\n")
     report = []
     for gi, g in enumerate(groups):
-        gg = sorted([items[i] for i in g], key=lambda v: (v.width * v.height, v.bitrate, v.size), reverse=True)
+        # 与 GUI 完全一致的质量判据：建议保留项排第一，理由一并打印
+        gpaths = order_group_by_quality([items[i].path for i in g], idx)
+        gg = [idx[p] for p in gpaths if p in idx]
+        keeper, why = pick_keeper(gg)
         saving = sum(v.size for v in gg) - max(v.size for v in gg)
         print(f"── 疑似重复组 {gi + 1}（{len(gg)} 个，可释放约 {human_size(saving)}）──")
+        if keeper is not None and why:
+            print(f"   建议保留：{keeper.name}（{why}）")
         for k, v in enumerate(gg):
             sim_txt = "" if k == 0 else f"　与本组首个相似度 {similarity_of(gg[0].hashes, v.hashes):.1%}"
-            print(f"  {'★' if k == 0 else ' '} {v.name}{sim_txt}")
+            # 控制台输出用 ASCII 的 '*'，避免 GBK 控制台编码问题（GUI 里仍用 ★）
+            print(f"  {'*' if k == 0 else ' '} {v.name}{sim_txt}")
             print(f"      {v.res_text}  {fmt_duration(v.duration)}  {fmt_bitrate(v.bitrate)}  "
                   f"{v.codec}  {human_size(v.size)}")
             print(f"      {v.path}")
@@ -2294,20 +3014,36 @@ def selftest() -> int:
     if HAS_CV2 and HAS_NUMPY:
         import tempfile
         tmp = Path(tempfile.mkdtemp(prefix="vd_selftest_"))
-        def make(path, seed=0, shift=0):
+        def make(path, kind="a", shift=0):
+            """
+            造合成画面。**背景刻意用渐变而不是纯黑**：
+            纯黑背景会被「忽略黑/白像素」的掩码整片扣掉，剩下的有效像素太少，
+            测出来的行为与真实视频不一致（这是实测踩过的坑）。
+            """
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             w = cv2.VideoWriter(str(path), fourcc, 20.0, (320, 240))
+            grad = np.linspace(40, 200, 320, dtype=np.uint8)          # 横向渐变背景
+            bg = cv2.cvtColor(np.tile(grad, (240, 1)), cv2.COLOR_GRAY2BGR)
             for i in range(60):
-                fr = np.zeros((240, 320, 3), np.uint8)
-                cv2.rectangle(fr, (20 + i + shift, 20), (120 + i + shift, 120), (0, 0, 255), -1)
-                cv2.circle(fr, (200, 150), 30 + (i % 20), (0, 255, 0), -1)
-                cv2.putText(fr, f"S{seed}", (10, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                if kind == "a":
+                    fr = bg.copy()
+                    cv2.rectangle(fr, (20 + i + shift, 20), (120 + i + shift, 120), (0, 0, 255), -1)
+                    cv2.circle(fr, (200, 150), 30 + (i % 20), (0, 255, 0), -1)
+                    cv2.putText(fr, "S0", (10, 225), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                                (255, 255, 255), 2)
+                else:
+                    # 完全不同的画面：纵向渐变 + 横向浅色条纹 + 移动的蓝圆
+                    # （背景同样不用纯黑，好让灰度通道真的参与判定而不是弃权）
+                    vgrad = np.linspace(30, 230, 240, dtype=np.uint8).reshape(240, 1)
+                    fr = cv2.cvtColor(np.tile(vgrad, (1, 320)), cv2.COLOR_GRAY2BGR)
+                    fr[::20] = (200, 200, 200)
+                    cv2.circle(fr, (60, 60), 35 + (i % 15), (255, 0, 0), -1)
                 w.write(fr)
             w.release()
         a, b, c = tmp / "a.mp4", tmp / "b.mp4", tmp / "c.mp4"
-        make(a, 0)
-        make(b, 0, 7)    # 轻微位移（模拟裁切/转码）
-        make(c, 9, 60)   # 完全不同的画面
+        make(a, "a")
+        make(b, "a", 7)     # 轻微位移（模拟裁切/转码）
+        make(c, "c")        # 完全不同的画面
         fa = compute_features(str(a))
         fb = compute_features(str(b))
         fc = compute_features(str(c))
@@ -2315,8 +3051,16 @@ def selftest() -> int:
         d_ac = hash_distance(fa["hashes"], fc["hashes"])
         print(f"\n同源样本平均汉明距离 : {d_ab:.2f} / 64  -> 相似度 {1 - d_ab / 64:.2%}")
         print(f"异源样本平均汉明距离 : {d_ac:.2f} / 64  -> 相似度 {1 - d_ac / 64:.2%}")
+        if fa["gray"] and fb["gray"] and fc["gray"]:
+            g_ab, n_ab = masked_gray_distance(fa["gray"], fb["gray"])
+            g_ac, n_ac = masked_gray_distance(fa["gray"], fc["gray"])
+            # npos == 0 表示"有效像素太少、无法判定"，与"相似度 0%"是两件事，
+            # 打印时要区分开（灰色/纯色画面会走到这个分支）
+            fmt = lambda d, n: (f"相似度 {1 - d:.2%}" if n else "无法判定（有效像素太少）")
+            print(f"灰度掩码通道（同源）: {fmt(g_ab, n_ab)}")
+            print(f"灰度掩码通道（异源）: {fmt(g_ac, n_ac)}")
         ok = d_ab < d_ac and d_ab <= (1 - 0.90) * 64
-        print(f"算法判定：{'通过 ✓（同源可识别，异源可区分）' if ok else '未通过 ✗'}")
+        print(f"算法判定：{'通过 OK（同源可识别，异源可区分）' if ok else '未通过 FAIL'}")
         print(f"缩略图输出：封面帧={bool(fa['cover'])} 内容帧={bool(fa['thumb'])} 中间帧={bool(fa['thumb_mid'])}")
 
         # 封面帧"避黑场"校验：造一个前 1 秒纯黑、之后才有画面的视频
@@ -2339,21 +3083,139 @@ def selftest() -> int:
                 cover_std = float(np.asarray(im.convert("L")).std())
         cover_ok = cover_std > 8.0
         print(f"封面帧避黑场：封面亮度标准差 {cover_std:.1f} -> "
-              f"{'通过 ✓（没有取到黑帧）' if cover_ok else '未通过 ✗（取到了黑帧）'}")
+              f"{'通过 OK（没有取到黑帧）' if cover_ok else '未通过 FAIL（取到了黑帧）'}")
         ok = ok and cover_ok
+
+        # ---- 掩码比对（抗水印）校验 ----
+        # 造一个"内容与 a 相同、但每帧左上角压了一块白色水印"的视频，
+        # 验证：① 不开掩码时相似度被水印拉低；② 开掩码后相似度明显回升。
+        # 这是掩码"真的生效"的直接证据，而不是只跑通不报错。
+        def make_watermark(path):
+            w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (320, 240))
+            grad = np.linspace(40, 200, 320, dtype=np.uint8)
+            bg = cv2.cvtColor(np.tile(grad, (240, 1)), cv2.COLOR_GRAY2BGR)
+            for i in range(60):
+                fr = bg.copy()
+                cv2.rectangle(fr, (20 + i, 20), (120 + i, 120), (0, 0, 255), -1)
+                cv2.circle(fr, (200, 150), 30 + (i % 20), (0, 255, 0), -1)
+                cv2.putText(fr, "S0", (10, 225), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (255, 255, 255), 2)
+                # 白色不透明水印（模拟台标 / 字幕条）：与 a 唯一的不同点
+                cv2.rectangle(fr, (10, 8), (150, 46), (255, 255, 255), -1)
+                w.write(fr)
+            w.release()
+
+        wm = tmp / "watermark.mp4"
+        make_watermark(wm)
+        fw = compute_features(str(wm))
+        if fa["gray"] and fw["gray"]:
+            d_masked, npos = masked_gray_distance(fa["gray"], fw["gray"], True, True)
+            d_plain, n_plain = masked_gray_distance(fa["gray"], fw["gray"], False, False)
+            sim_masked, sim_plain = 1.0 - d_masked, 1.0 - d_plain
+            print("\n灰度掩码校验（与无水印原片比）：")
+            print(f"  不用掩码：平均像素差 {d_plain * 255:6.2f}/255 -> 相似度 {sim_plain:.2%}"
+                  f"（水印把它拉低了）")
+            if npos == 0:
+                print("  启用掩码：无法判定（有效像素太少）-> 未通过 FAIL")
+                ok = False
+            else:
+                print(f"  启用掩码：平均像素差 {d_masked * 255:6.2f}/255 -> 相似度 {sim_masked:.2%}"
+                      f"（有效位置 {npos} 个）")
+                mask_ok = sim_masked > sim_plain
+                print(f"  掩码是否生效：{'通过 OK（掩码后相似度更高）' if mask_ok else '未通过 FAIL（掩码没起作用）'}")
+                ok = ok and mask_ok
+
+            # 端到端：带水印的那个必须能和原片判为一组（两个通道 OR 的结果）
+            ia = VideoItem(path=str(a), hashes=fa["hashes"], gray=fa["gray"])
+            iw = VideoItem(path=str(wm), hashes=fw["hashes"], gray=fw["gray"])
+            hit, sim, chan = compare_pair(ia, iw, DEFAULT_THRESHOLD, DEFAULT_THRESHOLD_GRAY)
+            print(f"  端到端判重：命中={hit} 相似度={sim:.2%} 命中通道={chan or '无'}"
+                  f"  -> {'通过 OK' if hit else '未通过 FAIL'}")
+            ok = ok and hit
+
+            # 关键回归：OR 门绝不能把"完全不同的视频"也判成重复。
+            # 灰度通道若不设有效像素下限，很容易在这里误报（实测踩过：
+            # 大片纯黑的画面扣除黑色后只剩极少有效像素，两个不同视频被判 99.9% 相似）。
+            ic = VideoItem(path=str(c), hashes=fc["hashes"], gray=fc["gray"])
+            hit_c, sim_c, chan_c = compare_pair(ia, ic, DEFAULT_THRESHOLD,
+                                                DEFAULT_THRESHOLD_GRAY)
+            fp_ok = not hit_c
+            print(f"  异源不得误判：命中={hit_c} 相似度={sim_c:.2%} 通道={chan_c or '无'}"
+                  f"  -> {'通过 OK' if fp_ok else '未通过 FAIL（误报）'}")
+            ok = ok and fp_ok
+
+            # 异源样本在灰度通道上必须仍然不像（掩码没有把有效信息也掩掉）
+            if fc["gray"]:
+                dg_ac, n_ac = masked_gray_distance(fa["gray"], fc["gray"], True, True)
+                if n_ac == 0:
+                    print("  异源样本灰度相似度：无法判定（有效像素太少）")
+                else:
+                    sim_ac = 1.0 - dg_ac
+                    print(f"  异源样本灰度相似度 {sim_ac:.2%}（应明显低于同源，否则掩码过度）")
+                    ok = ok and sim_ac < sim_masked
+        else:
+            print("\n灰度指纹为空，跳过掩码校验（FAIL）")
+            ok = False
+
         shutil.rmtree(tmp, ignore_errors=True)
         return 0 if ok else 1
     print("缺少 opencv-python/numpy，跳过算法自检。")
     return 0
 
 
+def _crash_report() -> None:
+    """
+    未捕获异常时的兜底：写日志 + 尽力弹窗。
+
+    打包成 --noconsole 后没有控制台，崩溃时用户只会看到"程序闪一下就没了"，
+    完全不知道发生了什么。这里把堆栈写到 exe 旁边的「崩溃日志.txt」，并弹窗告知。
+    """
+    tb = traceback.format_exc()
+    log_path = None
+    try:
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+        log_path = base / "崩溃日志.txt"
+        log_path.write_text(
+            f"{APP_NAME} v{APP_VER}\n时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Python：{sys.version}\n\n{tb}", encoding="utf-8")
+    except Exception:
+        log_path = None
+    try:
+        if sys.stderr is not None:
+            sys.stderr.write(tb)
+    except Exception:
+        pass
+    if not have_console():
+        try:
+            import tkinter as _tk
+            import tkinter.messagebox as _mb
+
+            r = _tk.Tk()
+            r.withdraw()
+            _mb.showerror(
+                APP_NAME,
+                "程序遇到未预期的错误。\n\n"
+                + (f"详细信息已写入：\n{log_path}" if log_path else tb[-800:]))
+            r.destroy()
+        except Exception:
+            pass
+
+
 def main():
+    # 有参数 => 命令行模式，需要输出到控制台；无参数 => GUI 模式，
+    # 打包成 --noconsole 时双击不会弹出黑框（见 init_console 的说明）
+    init_console(need_console=len(sys.argv) > 1)
+
     ap = argparse.ArgumentParser(description=f"{APP_NAME} v{APP_VER}（全程本地运行）")
     ap.add_argument("--scan", help="命令行扫描指定目录")
     ap.add_argument("--out", help="输出 JSON 报告路径")
     ap.add_argument("--csv", help="输出 CSV 报告路径")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
-                    help=f"相似度阈值 0~1，默认 {DEFAULT_THRESHOLD}（越高越严格）")
+                    help=f"pHash 相似度阈值 0~1，默认 {DEFAULT_THRESHOLD}（越高越严格）")
+    ap.add_argument("--gray-threshold", type=float, default=DEFAULT_THRESHOLD_GRAY,
+                    help=f"灰度掩码通道阈值 0~1，默认 {DEFAULT_THRESHOLD_GRAY}（抗水印）")
+    ap.add_argument("--no-mask", action="store_true",
+                    help="关闭「忽略黑/白像素」掩码（默认开启；关闭后抗水印能力下降）")
     ap.add_argument("--tol", type=float, default=10.0, help="时长容差百分比，默认 10")
     ap.add_argument("--tol-sec", type=float, default=5.0, help="时长容差秒数，默认 5")
     ap.add_argument("--sample", type=int, default=SAMPLE_FRAMES_DEFAULT, help="每视频采样帧数")
@@ -2381,4 +3243,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        _crash_report()
+        raise

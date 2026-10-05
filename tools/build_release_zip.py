@@ -1,15 +1,23 @@
 # -*- coding: utf-8 -*-
-"""构建发布用 zip：把项目文件打进 dist/videodedup-v1.1.zip（顶层带版本目录，解压即可用）"""
+"""
+构建发布用 zip：把项目文件打进 dist/videodedup-<版本>.zip
+（顶层带版本目录，解压即可用）
+
+用法：
+    python tools/build_release_zip.py            :: 用脚本里的默认版本
+    python tools/build_release_zip.py --version v1.3
+"""
+from __future__ import annotations
+
+import argparse
 import hashlib
 import os
 import zipfile
 from pathlib import Path
 
-ROOT = Path(r"E:\pj\vchachong")
-VERSION = "v1.1"
-PKG_NAME = f"videodedup-{VERSION}"
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_VERSION = "v1.2"
 OUT_DIR = ROOT / "dist"
-OUT_ZIP = OUT_DIR / f"{PKG_NAME}.zip"
 
 # 要打包的文件（相对 ROOT）——不含 .git / .workbuddy / 缓存 / dist 自身
 FILES = [
@@ -17,69 +25,90 @@ FILES = [
     "requirements.txt",
     "运行工具.bat",
     "安装依赖.bat",
+    "打包exe.bat",
     "README.md",
     "LICENSE",
     "docs/screenshot-cover.png",
     "docs/screenshot-duration-sort.png",
+    "docs/ROADMAP.md",
     "tools/build_release_zip.py",
     "tools/gh_release.py",
+    "tools/make_testdata.py",
+    "tools/gui_smoketest.py",
+    "tools/bench_decode.py",
+    "tools/bench_decode_verify.py",
 ]
 
-# 压缩包内附带一个"先读我"，降低上手门槛
 READ_ME_FIRST = """怎么用（Windows）
 ==================================================
-1. 解压到一个不带中文/空格的路径也行，中文路径同样支持
-2. 双击「安装依赖.bat」  （只需一次，从 PyPI 下载 opencv-python 等库）
-3. 双击「运行工具.bat」
+【最省事】直接下载 Releases 里的 VideoDedupTool.exe，双击即可 ——
+          不需要装 Python，也不需要装 ffmpeg，所有依赖都已打进那一个文件。
 
-需要 Python 3.8 以上，官方安装包默认自带 tkinter。
-想先验证环境是否正常，可执行：
-    python video_dedup.py --selftest
+【想用源码版】需要 Python 3.8 以上（官方安装包默认自带 tkinter）：
+  1. 解压到任意目录（中文路径也支持）
+  2. 双击「安装依赖.bat」  （只需一次，从 PyPI 下载 opencv-python 等库）
+  3. 双击「运行工具.bat」
+
+想自己打包成 exe：双击「打包exe.bat」
+想先验证环境是否正常：python video_dedup.py --selftest
 
 命令行批量模式：
     python video_dedup.py --scan "D:\\视频库" --csv 报告.csv
+
+本工具不需要 ffmpeg
+==================================================
+元信息来自 pymediainfo 自带的 MediaInfo，解码来自 OpenCV 内置的 FFmpeg。
+实测可解 H.264 / H.265(8bit+10bit) / VP9 / AV1 / Xvid / MJPEG / WMV2 /
+MPEG-2(TS) / FLV / ProRes 等 12 种编码容器，全部成功。
 
 隐私说明
 ==================================================
 本工具全程在本机运行，不联网、不上传任何视频或图片、不调用云端模型。
 所有删除类操作都必须人工勾选并二次确认，默认走系统回收站。
 
-详细说明见 README.md，界面截图见 docs/ 目录。
+详细说明见 README.md，界面截图见 docs/ 目录，
+开发计划（含实测数据与踩坑记录）见 docs/ROADMAP.md。
 Copyright (c) 2026 seanfan   MIT License
 """
 
 
-def main():
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--version", default=DEFAULT_VERSION, help=f"版本号，默认 {DEFAULT_VERSION}")
+    args = ap.parse_args()
+
+    version = args.version
+    pkg_name = f"videodedup-{version}"
+    out_zip = OUT_DIR / f"{pkg_name}.zip"
     OUT_DIR.mkdir(exist_ok=True)
+
     missing = [f for f in FILES if not (ROOT / f).exists()]
     if missing:
         raise SystemExit(f"缺少文件：{missing}")
 
-    with zipfile.ZipFile(OUT_ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in FILES:
             src = ROOT / rel
-            # 统一用 / 作为分隔符，并加版本目录前缀
-            arc = f"{PKG_NAME}/{rel.replace(os.sep, '/')}"
+            arc = f"{pkg_name}/{rel.replace(os.sep, '/')}"
             zi = zipfile.ZipInfo.from_file(src, arc)
             zi.compress_type = zipfile.ZIP_DEFLATED
             # 固定时间戳，让重复打包结果可复现（便于校验）
-            zi.date_time = (2026, 10, 4, 0, 0, 0)
+            zi.date_time = (2026, 10, 5, 0, 0, 0)
             with open(src, "rb") as f:
                 z.writestr(zi, f.read())
-        # 额外附加一份"先读我"
-        z.writestr(f"{PKG_NAME}/先读我.txt", READ_ME_FIRST.encode("utf-8"))
+        z.writestr(f"{pkg_name}/先读我.txt", READ_ME_FIRST.encode("utf-8"))
 
-    size = OUT_ZIP.stat().st_size
-    sha = hashlib.sha256(OUT_ZIP.read_bytes()).hexdigest()
-    print(f"已生成：{OUT_ZIP}")
-    print(f"大小：{size:,} 字节（{size/1024:.1f} KB）")
+    size = out_zip.stat().st_size
+    sha = hashlib.sha256(out_zip.read_bytes()).hexdigest()
+    print(f"已生成：{out_zip}")
+    print(f"大小：{size:,} 字节（{size / 1024:.1f} KB）")
     print(f"SHA256：{sha}")
     print("\n压缩包内容：")
-    with zipfile.ZipFile(OUT_ZIP) as z:
+    with zipfile.ZipFile(out_zip) as z:
         for i in z.infolist():
-            print(f"  {i.filename:<52} {i.file_size:>9,} 字节")
+            print(f"  {i.filename:<56} {i.file_size:>9,} 字节")
         bad = z.testzip()
-        print("\n完整性校验：", "通过 ✓" if bad is None else f"损坏 ✗ ({bad})")
+        print("\n完整性校验：", "通过 OK" if bad is None else f"损坏 FAIL ({bad})")
     return 0
 
 
