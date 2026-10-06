@@ -12,7 +12,7 @@
 
 一个纯本地运行的 Windows 视频查重工具：递归扫描文件夹 → 完整列出所有视频 → 用**双通道指纹**自动找出同源视频并分组 → 人工勾选后执行「移入回收站 / 移动到备份文件夹」。
 
-> **隐私硬规则**：全部运算在本机完成。代码中不存在任何网络请求（无 `requests` / `urllib` / `socket` / http 调用），不上传视频或图片、不调用任何云端模型、不联网。
+> **隐私硬规则**：全部运算都在本地完成。代码中不存在任何网络请求（无 `requests` / `urllib` / `socket` / http 调用），不上传视频或图片、不调用任何云端模型、不联网。
 >
 > **不需要安装 ffmpeg**：元信息来自 `pymediainfo` 自带的 MediaInfo，解码来自 OpenCV 内置的 FFmpeg。实测可解 H.264 / H.265(8bit+10bit) / VP9 / AV1 / Xvid / MJPEG / WMV2 / MPEG-2 / FLV / ProRes 等 12 种编码容器，全部成功。
 
@@ -230,7 +230,7 @@ python video_dedup.py --scan "D:\视频库" --no-recursive --min-size 20 --worke
 | `docs/PROJECT-STATUS.md` | 项目状态：功能边界、已知取舍与停止开发说明 |
 | `LICENSE` | MIT 开源协议 |
 
-运行期产生的本地文件（都在本机，可随时删除）：
+运行期产生的本地文件（都在本地，可随时删除）：
 
 | 路径 | 用途 |
 | --- | --- |

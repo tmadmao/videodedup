@@ -14,7 +14,7 @@
 """
 import os, sys, time, subprocess, statistics, json
 
-# 样本目录与 ffmpeg 路径都可用环境变量覆盖，默认值仅为本机方便
+# 样本目录与 ffmpeg 路径都可用环境变量覆盖，默认值仅为本地调试方便
 B = os.environ.get("VD_BENCH_DIR", r"C:\Users\Administrator\AppData\Local\Temp\vd_bench")
 FFMPEG = os.environ.get("FFMPEG", r"C:\ffmpeg\bin\ffmpeg.exe")
 

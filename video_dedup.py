@@ -20,7 +20,7 @@
   8. 简体中文 GUI（tkinter）
 
 隐私与安全
-  * 全部运算在本机完成，代码中没有任何网络请求（无 requests / urllib / socket / http 调用）
+  * 全部运算在本地完成，代码中没有任何网络请求（无 requests / urllib / socket / http 调用）
   * 不上传视频或图片、不调用任何云端模型
   * 绝不自动删除：所有删除类操作都必须先人工勾选，并二次确认（默认走系统回收站）
 
@@ -151,7 +151,7 @@ VIDEO_EXTS = {
     ".f4v", ".asf", ".divx", ".ogv", ".dat", ".mp2", ".mpe", ".mxf", ".m3u8",
 }
 
-# 缩略图缓存目录（本机临时目录，不联网）
+# 缩略图缓存目录（系统临时目录，不联网）
 THUMB_DIR = Path(os.environ.get("TEMP") or os.path.expanduser("~")) / "video_dedup_thumbs"
 CACHE_FILE = Path(os.path.expanduser("~")) / ".video_dedup_cache.json"
 CONFIG_FILE = Path(os.path.expanduser("~")) / ".video_dedup_config.json"
@@ -1582,7 +1582,7 @@ TAG_DUP = "dup"
 class VideoDedupApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"{APP_NAME} v{APP_VER}　—　全部计算在本机完成，不上传任何视频/图片")
+        self.root.title(f"{APP_NAME} v{APP_VER}　—　全部计算在本地完成，不上传任何视频/图片")
         self.root.geometry("1520x900")
         self.root.minsize(1180, 680)
 
@@ -2774,7 +2774,7 @@ class VideoDedupApp:
             why = fails[0][1] if fails else ""
             ans = tkmsg.askyesno(
                 APP_NAME,
-                f"有 {len(fails)} 个文件无法移入系统回收站（本机回收站接口不可用或权限受限）。\n"
+                f"有 {len(fails)} 个文件无法移入系统回收站（系统回收站接口不可用或权限受限）。\n"
                 f"原因示例：{why}\n\n"
                 f"是否改为移动到各自目录下的「_视频查重回收站」文件夹？\n"
                 f"（同样是移动操作，随时可以手动拖回，不会真正删除。选否 则什么都不做。）",

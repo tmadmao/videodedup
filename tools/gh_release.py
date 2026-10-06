@@ -4,7 +4,7 @@
 
 说明：
   * Release 无法通过 git 推送完成，只能调 GitHub REST API；
-  * 凭据从本机 Git 凭据管理器读取（git credential fill），
+  * 凭据从本地 Git 凭据管理器读取（git credential fill），
     **只在内存中使用，不写入磁盘、不打印到输出**；
   * 已存在同名 release / asset 时会先更新说明、删掉同名附件再上传，可重复执行。
 
@@ -142,6 +142,8 @@ Windows 本地视频查重工具：递归扫描文件夹 → 完整列出所有�
 - **仓库不再分发单文件 exe**：历史 Release 里的 `VideoDedupTool.exe` 附件已移除，
   想自己出单文件版随时可以打（`打包exe.bat` 里有现成命令）。
 - 打包脚本同步更新：`打包exe.bat` 改为 `--onedir` + 自动压 zip（新增 `tools/make_release_zip.py`）。
+- **文案修正**：窗口标题与界面提示里的「本机」改为「本地」——
+  介绍产品就说产品本身，不把开发机的说法带进来。
 
 > 完整的功能与修复说明请看 [v1.2.1 的发布说明](https://github.com/{OWNER}/{REPO}/releases/tag/v1.2.1)
 > （收尾版本，修复了项目审计发现的全部问题）。
@@ -184,7 +186,7 @@ def main() -> int:
 
     token = get_token()
     if not token:
-        print("未从本机 Git 凭据管理器取到 GitHub 凭据，无法调用 API。")
+        print("未从本地 Git 凭据管理器取到 GitHub 凭据，无法调用 API。")
         print(f"可改为手动发布：在仓库 Releases 页面选择 tag {version}，把 dist/ 里的文件拖进去。")
         return 2
 
