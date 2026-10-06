@@ -1,14 +1,14 @@
-# 本地视频查重小工具 v1.2.1
+# 本地视频查重小工具 v1.2.2
 
 > ## ⏹ 项目状态：已无限期停止开发
 >
-> 本工具的功能已经完整（v1.2.1 为收尾版本，修完了项目审计发现的全部问题）。
-> **因没有新的具体需求，本项目自 2026-10-05 起无限期停止开发**：
-> 不再有新功能、不再发布新版本。仓库保持公开可读，可自由 fork、修改与二次开发（MIT）。
+> 本工具的功能已经完整（v1.2.1 为收尾版本，修完了发布前全面自查发现的全部问题）。
+> **因没有新的具体需求，本项目自 2026-10-05 起无限期停止开发**：不再有新功能。
+> v1.2.2 只做**分发形式的修补**（单文件 exe → 文件夹版），算法与功能零改动。
+> 仓库保持公开可读，可自由 fork、修改与二次开发（MIT）。
 >
 > - 本次修复的问题清单 → [`CHANGELOG.md`](CHANGELOG.md)
 > - 功能边界、已知取舍与维护状态 → [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md)
-> - 项目审计报告（问题清单 + 实测证据） → [`docs/AUDIT-2026-10-05.md`](docs/AUDIT-2026-10-05.md)
 
 一个纯本地运行的 Windows 视频查重工具：递归扫描文件夹 → 完整列出所有视频 → 用**双通道指纹**自动找出同源视频并分组 → 人工勾选后执行「移入回收站 / 移动到备份文件夹」。
 
@@ -16,7 +16,13 @@
 >
 > **不需要安装 ffmpeg**：元信息来自 `pymediainfo` 自带的 MediaInfo，解码来自 OpenCV 内置的 FFmpeg。实测可解 H.264 / H.265(8bit+10bit) / VP9 / AV1 / Xvid / MJPEG / WMV2 / MPEG-2 / FLV / ProRes 等 12 种编码容器，全部成功。
 
-**v1.2.1 修复（收尾版本，问题全部来自项目审计）**
+**v1.2.2 变更（只改分发形式，功能零改动）**
+
+- **免安装版从「单文件 exe」改成「文件夹 + 启动器」**（PyInstaller `--onedir`）。单文件版每次双击都要先把约 250 MB 内容解压到临时目录，要等 5~10 秒；文件夹版依赖就摆在旁边，**启动是瞬时的**。同时单文件那种"运行时自解压"的行为在个别杀软的启发式眼里很像释放载荷的木马，换成分发文件夹后这个误报面也不存在了。
+- 仓库**不再分发单文件 exe**（历史 Release 里的 `VideoDedupTool.exe` 附件已移除）；想自己出单文件版随时可以打，`打包exe.bat` 里留了现成命令。
+- 源码改动仅一处版本号字符串 —— 算法、参数、判定逻辑与 v1.2.1 完全一致。
+
+**v1.2.1 修复（收尾版本，问题全部来自发布前全面自查）**
 
 - **修：命令行结果不可复现**。同一目录、同一参数连跑多次，"建议保留"会在两个**字节完全相同**的副本之间来回跳（实测 3 次跑出 2 种结果）。原因是命令行用 `as_completed` 收集结果，候选顺序随线程完成次序变化，而质量判据最后一级在数值相等时取"先遇到的"。现已固定按路径排序 + 确定化平局裁决：同输入必得同输出，命令行与界面也指向同一个文件。
 - **修：「重新分组」忽略灰度通道设置**。「灰度通道阈值」滑杆与「忽略黑/白像素」开关此前只在"开始扫描"时生效，点"重新分组"（以及移入回收站/备份后的自动重分组）会被静默忽略，与文档说法不符。现已一并传入；勾选框改动后立即重新分组。
@@ -74,7 +80,7 @@ pip install -r requirements.txt
 python video_dedup.py
 ```
 
-> 也可以直接下载打包好的压缩包：**[Releases](https://github.com/tmadmao/videodedup/releases/latest)** → `videodedup-v1.2.1.zip`（解压即用，同样是双击 bat）；不想装 Python 就直接下同页的 `VideoDedupTool.exe`。
+> 也可以直接下载打包好的压缩包：**[Releases](https://github.com/tmadmao/videodedup/releases/latest)** → `videodedup-v1.2.2.zip`（源码 + 文档 + 启动脚本，解压即用，同样是双击 bat）；不想装 Python 就直接下同页的 `VideoDedupTool-v1.2.2-win64.zip`（解压后双击文件夹里的 exe）。
 
 环境要求：Windows + Python 3.8 以上（官方安装包自带 tkinter）。
 建议 `ffmpeg` 在 PATH 中（缺失时仍可运行，只是元信息读取兜底方案少一层）。
@@ -213,15 +219,15 @@ python video_dedup.py --scan "D:\视频库" --no-recursive --min-size 20 --worke
 | --- | --- |
 | `video_dedup.py` | 主程序（GUI + 命令行 + 自检），单文件、带中文注释 |
 | `requirements.txt` | 依赖清单 |
-| `安装依赖.bat` / `运行工具.bat` / `打包exe.bat` | Windows 双击即用（装依赖 / 启动 / 打包免安装 exe） |
-| `docs/` | 界面截图与 [`ROADMAP.md`](docs/ROADMAP.md)（待开发清单） |
+| `安装依赖.bat` / `运行工具.bat` / `打包exe.bat` | Windows 双击即用（装依赖 / 启动 / 打包免安装**文件夹版** + 自动压发布 zip） |
+| `docs/` | 界面截图（主界面分组视图 / 平铺视图按时长排序） |
 | `tools/make_testdata.py` | 生成合成测试样本（同源变体 / 12 种编码 / 连环并组 / 损坏文件） |
 | `tools/gui_smoketest.py` | GUI 回归测试（26 项检查）。**会打开窗口，请在桌面会话下运行** |
 | `tools/bench_decode.py` + `bench_decode_verify.py` | 抽帧后端性能基准与**取帧准确性**复核 |
-| `tools/build_release_zip.py` / `gh_release.py` | 打发布包 / 发布到 GitHub Release |
+| `tools/make_release_zip.py` | 把 onedir 打包产物压成发布用 `VideoDedupTool-v1.2.2-win64.zip` |
+| `tools/build_release_zip.py` / `gh_release.py` | 打源码发布包 / 发布到 GitHub Release |
 | `CHANGELOG.md` | 更新日志（含 v1.2.1 修复的完整 BUG 清单） |
 | `docs/PROJECT-STATUS.md` | 项目状态：功能边界、已知取舍与停止开发说明 |
-| `docs/AUDIT-2026-10-05.md` | 项目审计报告（问题清单与实测证据） |
 | `LICENSE` | MIT 开源协议 |
 
 运行期产生的本地文件（都在本机，可随时删除）：
@@ -256,23 +262,44 @@ pHash 只能判断"画面高度相似"，以下情况容易产生误判，请人
 
 ---
 
-## 7. 免安装 exe（普通用户推荐）
+## 7. 免安装版（普通用户推荐）
 
-**不想装 Python 的话，直接下载 Releases 里的 exe 双击即可**——已把所有依赖（Python 运行时、OpenCV、numpy、Pillow、MediaInfo 等）打进单个文件，约 100 MB，第一次启动需要几秒解压属正常。
+**不想装 Python 的话，直接下载 Releases 里的 `VideoDedupTool-v1.2.2-win64.zip`**——已把所有依赖（Python 运行时、OpenCV、numpy、Pillow、MediaInfo 等）打进文件夹，zip 约 105 MB、解开后约 254 MB：
 
-自己打包则双击 `打包exe.bat`，或手动执行：
+```
+解压 → 双击 VideoDedupTool\VideoDedupTool.exe → 选目录 → 开始扫描
+```
+
+> **文件夹版要整体使用**：把 exe 单独拖出来会跑不起来，依赖就在同级的 `_internal\` 里。
+> 文件夹与 exe 都可以自由改名（含中文名），比如整个文件夹改成「视频查重」，exe 改成「视频查重工具.exe」。
+
+> **杀软提示**：本软件为自制工具，未做代码签名；所有代码都在本仓库里，可自行查阅核对。
+> 若被杀软误报，把整个文件夹加进信任区即可。
+
+自己打包则双击 `打包exe.bat`（会自动打包 + 压成发布用 zip），或手动执行：
 
 ```bat
 pip install pyinstaller
-pyinstaller --onefile --noconsole --name VideoDedupTool ^
+pyinstaller --onedir --noconsole --name VideoDedupTool ^
             --distpath dist --workpath build --specpath build video_dedup.py
+python tools\make_release_zip.py
 ```
 
-关于打包的两点实测经验：
+**为什么发文件夹版而不是单文件 exe**（v1.2.2 起）：
+
+| | 单文件 `--onefile` | 文件夹 `--onedir`（现用） |
+| --- | --- | --- |
+| 启动 | 每次双击先解压约 250 MB 内容到临时目录，等 5~10 秒 | **瞬时**（依赖就在旁边，无需解压） |
+| 杀软误报面 | 运行时自解压，行为与"释放载荷的木马"相似 | 无自解压行为，误报面小得多 |
+| 分发 | 一个文件，好管理 | 一个 zip / 一个文件夹 |
+
+> 想要单文件 exe 的话可以自己打：把上面的 `--onedir` 换成 `--onefile`、加上 `--noconfirm --clean` 即可（`打包exe.bat` 末尾也留了现成命令）。
+
+关于打包的三点实测经验：
 
 - `pymediainfo` 的 `MediaInfo.dll` 会被 PyInstaller **自动收集**，无需手动指定（冻结后 `pymediainfo: True`，元信息读取正常）。
 - **`--noconsole` 下终端符号会踩编码坑**：中文 Windows 的 cmd 默认代码页 936（GBK）里没有 `✓`(U+2713)，一旦输出被重定向到文件，Python 会用 cp936 严格编码并抛 `UnicodeEncodeError` 直接崩溃。程序已修好（启动时 `reconfigure(errors="replace")`、控制台输出只用 ASCII 符号、`--noconsole` 下用空写入器兜住 `print`），并在带参数运行时自动附着父控制台，所以**打包成无控制台版后命令行模式依然可用**。
-- exe 可自由改名（含中文名），不影响运行，比如改成「视频查重工具.exe」。
+- 打包后想看 `--selftest` / `--scan` 的输出，在 cmd 里 `cd` 到 exe 所在目录再执行即可（不要直接双击带参数的 exe）。
 
 ---
 

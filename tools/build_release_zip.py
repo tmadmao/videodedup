@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_VERSION = "v1.2.1"
+DEFAULT_VERSION = "v1.2.2"
 OUT_DIR = ROOT / "dist"
 
 # 要打包的文件（相对 ROOT）——不含 .git / .workbuddy / 缓存 / dist 自身
@@ -31,10 +31,9 @@ FILES = [
     "LICENSE",
     "docs/screenshot-cover.png",
     "docs/screenshot-duration-sort.png",
-    "docs/ROADMAP.md",
     "docs/PROJECT-STATUS.md",
-    "docs/AUDIT-2026-10-05.md",
     "tools/build_release_zip.py",
+    "tools/make_release_zip.py",
     "tools/gh_release.py",
     "tools/make_testdata.py",
     "tools/gui_smoketest.py",
@@ -44,15 +43,16 @@ FILES = [
 
 READ_ME_FIRST = """怎么用（Windows）
 ==================================================
-【最省事】直接下载 Releases 里的 VideoDedupTool.exe，双击即可 ——
-          不需要装 Python，也不需要装 ffmpeg，所有依赖都已打进那一个文件。
+【最省事】直接下载 Releases 里的 VideoDedupTool-v1.2.2-win64.zip ——
+          不需要装 Python，也不需要装 ffmpeg，所有依赖都已打进那个文件夹。
+          解压后双击 VideoDedupTool\\VideoDedupTool.exe 即可（文件夹别拆开）。
 
 【想用源码版】需要 Python 3.8 以上（官方安装包默认自带 tkinter）：
   1. 解压到任意目录（中文路径也支持）
   2. 双击「安装依赖.bat」  （只需一次，从 PyPI 下载 opencv-python 等库）
   3. 双击「运行工具.bat」
 
-想自己打包成 exe：双击「打包exe.bat」
+想自己打包成免安装版：双击「打包exe.bat」
 想先验证环境是否正常：python video_dedup.py --selftest
 
 命令行批量模式：
@@ -69,9 +69,13 @@ MPEG-2(TS) / FLV / ProRes 等 12 种编码容器，全部成功。
 本工具全程在本机运行，不联网、不上传任何视频或图片、不调用云端模型。
 所有删除类操作都必须人工勾选并二次确认，默认走系统回收站。
 
+杀软说明
+==================================================
+本软件为自制工具，未做代码签名；所有代码都在开源仓库里，可自行查阅核对。
+若被杀软误报，把所在文件夹加进信任区即可。
+
 详细说明见 README.md，界面截图见 docs/ 目录，
-更新日志见 CHANGELOG.md，项目状态（已停止开发）见 docs/PROJECT-STATUS.md，
-开发计划与实测数据见 docs/ROADMAP.md，项目审计报告见 docs/AUDIT-2026-10-05.md。
+更新日志见 CHANGELOG.md，项目状态（已停止开发）见 docs/PROJECT-STATUS.md。
 Copyright (c) 2026 seanfan   MIT License
 """
 
@@ -117,9 +121,11 @@ def main() -> int:
     # 校验清单（v1.2.1 起）：把本次发布产物的 SHA256 落到 dist/SHA256SUMS.txt，
     # 便于在不打开 Release 页面的情况下独立核对分发文件是否被改动。
     lines = [f"{sha}  {out_zip.name}"]
-    exe = OUT_DIR / "VideoDedupTool.exe"
-    if exe.exists():
-        lines.append(f"{hashlib.sha256(exe.read_bytes()).hexdigest()}  {exe.name}")
+    # v1.2.2 起 exe 改成 onedir 文件夹版分发，这里顺带把文件夹包也记上
+    folder_zip = OUT_DIR / f"VideoDedupTool-{version}-win64.zip"
+    if folder_zip.exists():
+        lines.append(f"{hashlib.sha256(folder_zip.read_bytes()).hexdigest()}"
+                     f"  {folder_zip.name}")
     sums = OUT_DIR / "SHA256SUMS.txt"
     sums.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n校验清单：{sums}")

@@ -19,6 +19,10 @@ build/
 build_test/
 *.spec
 
+# ---- 本地开发记录（含开发过程细节，不随仓库分发）----
+docs/ROADMAP.md
+docs/AUDIT-2026-10-05.md
+
 # ---- 测试用的样本视频/临时产物 ----
 testdata/
 *.tmp

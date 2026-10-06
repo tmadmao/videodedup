@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OWNER, REPO = "tmadmao", "videodedup"
 API = "https://api.github.com"
-DEFAULT_VERSION = "v1.2.1"
+DEFAULT_VERSION = "v1.2.2"
 
 CONTENT_TYPES = {
     ".zip": "application/zip",
@@ -94,7 +94,7 @@ def build_body(version: str, assets: list) -> str:
     sha_lines = "\n".join(
         f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}" for p, _ in assets
     )
-    return f"""## 本地视频查重小工具 {version}（收尾版本）
+    return f"""## 本地视频查重小工具 {version}（分发形式变更，功能零改动）
 
 Windows 本地视频查重工具：递归扫描文件夹 → 完整列出所有视频 →
 用**双通道指纹**（pHash + 灰度通道）自动找出同源视频并分组 →
@@ -105,8 +105,8 @@ Windows 本地视频查重工具：递归扫描文件夹 → 完整列出所有�
 
 > ## ⏹ 项目状态：已无限期停止开发
 >
-> v1.2.1 是**收尾版本**，只修缺陷、不加功能。本项目因没有新的具体需求，
-> 自 2026-10-05 起无限期停止开发，不再有新版本。
+> 版本号继续维护，但**只改分发形式，不加功能**。本项目因没有新的具体需求，
+> 自 2026-10-05 起无限期停止开发。
 > 仓库保持公开可读，可自由 fork 与二次开发（MIT）。
 > 功能边界与已知取舍见 `docs/PROJECT-STATUS.md`。
 
@@ -116,51 +116,35 @@ Windows 本地视频查重工具：递归扫描文件夹 → 完整列出所有�
 |---|---|---|
 {rows}
 
-**普通用户直接下 exe 就行** —— 不用装 Python、不用装任何依赖，双击打开。
-（首次启动要把约 100 MB 解压到临时目录，等几秒属正常；exe 可自由改名。）
+**普通用户直接下 `VideoDedupTool-{version}-win64.zip`** —— 不用装 Python、不用装任何依赖：
 
-### 🛠 本版修复（{version}）
+```
+解压 → 双击 VideoDedupTool\\VideoDedupTool.exe → 选目录 → 开始扫描
+```
 
-本次发布的内容**全部是修复**，问题来自三版开发后的项目审计（`docs/AUDIT-2026-10-05.md`）。
+> **这个 zip 和以前那个 zip 的区别**：以前发的是一个**单文件 exe**（`--onefile`，
+> 每次双击都要先把约 100 MB 解压到临时目录，等 5~10 秒）；现在发的是
+> **文件夹版**（`--onedir`，依赖就摆在文件夹里，启动瞬时）。
+> 文件夹要整体使用、别把 exe 单独拖出来。exe 可以自由改名，比如改成「视频查重工具.exe」。
 
-- **修：命令行结果不可复现。** 同一目录、同一参数连跑多次，"建议保留"会在两个**字节完全相同**
-  的副本之间来回跳（审计实测：同一条命令 3 次跑出 2 种结果）。
-  根因是命令行用 `as_completed` 收集结果、候选顺序随线程完成次序变化，
-  而质量判据最后一级在数值相等时取"先遇到的"。现已固定按路径排序 + 确定化平局裁决：
-  **同输入必得同输出，命令行与界面也指向同一个文件**。
-- **修：「重新分组」忽略灰度通道设置。** 「灰度通道阈值」滑杆与「忽略黑/白像素」开关
-  此前只在"开始扫描"时生效，点"重新分组"（以及移入回收站/备份后的自动重分组）
-  会被静默忽略。现已一并传入；勾选框改动后立即重新分组。
-- **修：自检对抗水印的结论过于乐观。** 原自检只用"不透明纯白块"水印，得出
-  "掩码把相似度从 95% 拉回 99.96%"；现新增**半透明台标**用例（贴近真实平台水印），
-  实测该场景掩码增益仅 +0.5pp —— 半透明水印合成后既不到近白也不到近黑，
-  **掩码排除不到它，真正把它认出来的是 32×32 灰度通道本身**。文档口径已修正。
-- **修：18 处对话框未设置父窗口**，少数窗口环境下消息框会落到主窗口之后，
-  界面看起来像死机。
-- **修：4 个参数"存了不读"**（时长容差 / 采样帧数 / 跳过小于(MB) / 上次备份目录
-  每次启动都被重置为默认值）。
-- 另修：缩略图缓存版本号未跟随主缓存升级、一处重复的异常分支，以及 README 中
-  下载包版本号、自检项数、重复表格行等文档不一致。
+> **杀软提示**：本软件为自制工具，未做代码签名；所有代码都在本仓库里，可自行查阅核对。
+> 若被杀软误报，把所在文件夹加进信任区即可。
 
-### 📊 实测识别效果
+### 🛠 本版变更（{version}）
 
-同一段视频的四种变形 + 一个无关视频，两个通道各自的相似度：
+**只改了「怎么发」，没改「怎么算」** —— 功能、参数、判定逻辑与 v1.2.1 完全一致，
+源码改动仅一处版本号字符串。
 
-| 变形 | pHash | 灰度通道 |
-| --- | --- | --- |
-| 复制改名 | 100.0% | 100.0% |
-| 二次转码（854×480 CRF32） | 98.4% | 99.6% |
-| 轻微裁切 | 92.5% | 97.7% |
-| 加水印 | **86.6%** | **99.0%** |
-| **完全无关的视频** | 52.1% | 74.9% |
+- **分发形式：单文件 exe → onedir 文件夹 + zip。**
+  原来的 `--onefile` 每次启动都要把约 100 MB 依赖解压到临时目录（双击后等 5~10 秒），
+  而且这种"运行时自解压"的行为在个别杀软的启发式眼里与释放载荷的木马很像。
+  改成文件夹版后**启动是瞬时的，也不再有自解压行为**，误报面小得多。
+- **仓库不再分发单文件 exe**：历史 Release 里的 `VideoDedupTool.exe` 附件已移除，
+  想自己出单文件版随时可以打（`打包exe.bat` 里有现成命令）。
+- 打包脚本同步更新：`打包exe.bat` 改为 `--onedir` + 自动压 zip（新增 `tools/make_release_zip.py`）。
 
-默认 `pHash 0.80` + `灰度通道 0.92`，任一命中即判重。
-
-> **关于「掩码」的适用范围（如实说明）**：抗水印的主力是**灰度通道本身**，
-> 不是掩码。掩码（忽略近黑 ≤32 / 近白 ≥240）真正有用的是黑边、纯白台标、
-> 烧制白字幕；对最常见的**半透明水印**几乎没有增益（合成后这些像素既不到 240
-> 也不低于 32，掩码排除不到它们），并且掩码会抬高异源相似度
-> （实测 66.1% → 74.9%），略微压缩安全区。`--selftest` 现在两种水印都会测。
+> 完整的功能与修复说明请看 [v1.2.1 的发布说明](https://github.com/{OWNER}/{REPO}/releases/tag/v1.2.1)
+> （收尾版本，修复了项目审计发现的全部问题）。
 
 ### 🔒 校验（SHA256）
 
@@ -168,7 +152,7 @@ Windows 本地视频查重工具：递归扫描文件夹 → 完整列出所有�
 {sha_lines}
 ```
 
-也可以直接看仓库 `dist/SHA256SUMS.txt`（v1.2.1 起由打包脚本生成）。
+也可以直接看仓库 `dist/SHA256SUMS.txt`（由打包脚本生成）。
 
 ### 📄 许可
 
@@ -179,7 +163,7 @@ MIT License · Copyright (c) 2026 seanfan
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default=DEFAULT_VERSION)
-    ap.add_argument("--only-zip", action="store_true", help="只上传源码包，跳过 exe")
+    ap.add_argument("--only-zip", action="store_true", help="只上传源码包，跳过免安装文件夹包")
     args = ap.parse_args()
 
     version = args.version
@@ -190,12 +174,13 @@ def main() -> int:
         print(f"找不到源码包：{zip_path}\n请先执行 python tools/build_release_zip.py")
         return 1
     assets.append((zip_path, "源码 + 文档 + 启动脚本，解压即用"))
-    exe_path = ROOT / "dist" / "VideoDedupTool.exe"
-    if exe_path.exists() and not args.only_zip:
-        assets.append((exe_path, "**免安装版：双击即用**，已内置全部依赖"))
+    # v1.2.2 起免安装版是 onedir 文件夹 + zip（不再发单文件 exe）
+    exe_zip = ROOT / "dist" / f"VideoDedupTool-{version}-win64.zip"
+    if exe_zip.exists() and not args.only_zip:
+        assets.append((exe_zip, "**免安装版（文件夹）**：解压后双击里面的 exe，已内置全部依赖"))
     elif not args.only_zip:
-        print(f"提示：没找到 {exe_path}，将只发布源码包。")
-        print("      先打包：双击 打包exe.bat，或执行 tools/gh_release.py 前先跑 PyInstaller")
+        print(f"提示：没找到 {exe_zip}，将只发布源码包。")
+        print("      先打包：双击 打包exe.bat（会同时生成文件夹版与 zip）")
 
     token = get_token()
     if not token:
@@ -224,7 +209,7 @@ def main() -> int:
     rid = rel["id"]
     print(f"  成功：{rel['html_url']}")
 
-    # 2) 清掉同名旧附件，避免重复
+    # 2) 清掉同名旧附件，避免重复；顺手清掉历史遗留的单文件 exe 附件
     status, old = api(f"/repos/{OWNER}/{REPO}/releases/{rid}/assets", token=token)
     existing = {a["name"]: a["id"] for a in old} if status == 200 else {}
     for path, _note in assets:
@@ -232,6 +217,10 @@ def main() -> int:
             print(f"  删除旧附件 {path.name} …")
             api(f"/repos/{OWNER}/{REPO}/releases/assets/{existing[path.name]}",
                 "DELETE", token=token)
+    for name, aid in existing.items():
+        if name.lower().endswith(".exe"):
+            print(f"  删除历史遗留的单文件 exe 附件 {name} …")
+            api(f"/repos/{OWNER}/{REPO}/releases/assets/{aid}", "DELETE", token=token)
 
     # 3) 上传附件（大文件给更长的超时）
     upload_base = rel["upload_url"].split("{")[0]
