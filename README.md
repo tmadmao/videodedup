@@ -303,6 +303,14 @@ python tools\make_release_zip.py
 
 ---
 
+## 捐助 ☕
+
+如果这个项目帮到了你，欢迎请我喝杯咖啡。支持支付宝、微信、Ko-fi。
+
+[![请我喝咖啡 / Buy Me a Coffee](https://raw.githubusercontent.com/tmadmao/nascomicreader/main/sponsor.png)](http://iptv.new.tg/sponsor.html)
+
+[请我喝咖啡 · Buy Me a Coffee](http://iptv.new.tg/sponsor.html) — 随心就好，赞助不换取任何功能优先权，也不改变 issue 的处理顺序。
+
 ## 8. 许可证
 
 本项目基于 [MIT License](LICENSE) 开源，你可以自由使用、修改、分发（包括商用），只需保留版权声明。
